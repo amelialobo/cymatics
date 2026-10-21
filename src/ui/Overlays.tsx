@@ -111,9 +111,6 @@ export function Welcome() {
             </button>
           ))}
         </div>
-        <button onClick={done} className="mt-4 min-h-11 w-full cursor-pointer rounded-full text-[14px] font-medium text-soft transition-colors hover:text-white">
-          Just watch for now
-        </button>
       </div>
     </div>
   );
