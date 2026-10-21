@@ -20,7 +20,7 @@ export function Intro() {
           'absolute inset-x-0 flex justify-center px-4 transition-opacity duration-500',
           show ? 'opacity-100' : 'opacity-0'
         )}
-        style={{ top: `calc(50% + ${gap}px + clamp(20px, 4vh, 44px))` }}
+        style={{ top: `calc(50% - var(--dock-h, 0px) / 2 + ${gap}px + clamp(20px, 4vh, 44px))` }}
       >
         <p role="status" className="flex items-center gap-2.5 rounded-full bg-black/70 px-4 py-1.5 text-[15px] text-white backdrop-blur-sm sm:text-[16px]">
           <span aria-hidden className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/25 border-t-white" />
@@ -298,7 +298,7 @@ export function Bolt() {
     <div
       aria-hidden
       className={cx(
-        'pointer-events-none fixed left-1/2 top-1/2 z-[1] h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full transition-opacity duration-700',
+        'pointer-events-none fixed left-1/2 top-[calc(50%-var(--dock-h,0px)/2)] z-[1] h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full transition-opacity duration-700',
         hidden ? 'opacity-0' : 'opacity-100'
       )}
       style={{

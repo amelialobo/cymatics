@@ -74,6 +74,9 @@ export function clientToPlate(cx: number, cy: number, w: number, h: number) {
 }
 
 export function desiredParticles(cssW: number, cssH: number, density: number, coarse: boolean) {
-  const base = cssW * cssH * (coarse ? 0.3 : 0.6);
+  // a phone's plate spans its long side, so it is drawn small and its lines
+  // crowd together: what keeps them full is sand per line, which scales with
+  // the short side rather than the area
+  const base = coarse ? Math.max(cssW * cssH * 0.3, Math.min(cssW, cssH) * 820) : cssW * cssH * 0.6;
   return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 409600 : 1048576));
 }

@@ -114,7 +114,9 @@ export default function App() {
       <main
         ref={stageRef}
         aria-label="Vibrating plate. Touch or drag to stir the sand."
-        className="fixed inset-0 touch-none bg-black"
+        className="fixed inset-x-0 top-0 touch-none bg-black"
+        // the plate sits centred in the space above the dock
+        style={{ bottom: 'var(--dock-h, 0px)' }}
       />
       {renderer !== 'none' && <Bolt />}
       {renderer === 'none' && <NoRenderer />}
