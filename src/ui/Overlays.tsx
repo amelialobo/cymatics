@@ -132,6 +132,7 @@ export function Help() {
     ['R', 'Scatter the sand'],
     ['S', 'Save an image'],
     ['A', 'Open Adjust'],
+    ['C', 'Open Colours'],
     ['F', 'Full screen'],
     ['?', 'This help'],
     ['Esc', 'Close panels'],

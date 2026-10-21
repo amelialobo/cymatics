@@ -40,6 +40,8 @@ export interface UIState {
   titleBottom: number;
   /** the Adjust panel */
   panelOpen: boolean;
+  /** the Colours pop-up */
+  coloursOpen: boolean;
   helpOpen: boolean;
   /** first-visit welcome card */
   welcome: boolean;
@@ -93,6 +95,7 @@ export const ui = createStore<UIState>({
   intro: 'forming',
   titleBottom: 80,
   panelOpen: false,
+  coloursOpen: false,
   helpOpen: false,
   welcome: !readFlag('cymatics:welcomed'),
   details: readFlag('cymatics:details'),

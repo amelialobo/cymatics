@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Experience } from './core/Experience';
 import { setParams, toast, ui, useUI } from './core/store';
 import { AdjustPanel } from './ui/AdjustPanel';
+import { ColourPanel } from './ui/ColourPanel';
 import { Dock, TopBar } from './ui/Bars';
 import { ExperienceContext, toggleFullscreen } from './ui/context';
 import { Bolt, Details, DropOverlay, FileInput, Help, Intro, Loader, NoRenderer, Toast, Welcome } from './ui/Overlays';
@@ -33,7 +34,7 @@ export default function App() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k === 'escape') {
-        ui.set({ panelOpen: false, helpOpen: false });
+        ui.set({ panelOpen: false, helpOpen: false, coloursOpen: false });
         return;
       }
       if (ui.get().intro !== 'done') return;
@@ -56,8 +57,9 @@ export default function App() {
       else if (k === 's') void exp.savePNG();
       else if (k === 'f') toggleFullscreen();
       else if (k === 'r') exp.scatter();
-      else if (k === 'a') ui.set({ panelOpen: !ui.get().panelOpen, helpOpen: false });
-      else if (k === '?') ui.set({ helpOpen: !ui.get().helpOpen, panelOpen: false });
+      else if (k === 'a') ui.set({ panelOpen: !ui.get().panelOpen, helpOpen: false, coloursOpen: false });
+      else if (k === 'c') ui.set({ coloursOpen: !ui.get().coloursOpen, panelOpen: false, helpOpen: false });
+      else if (k === '?') ui.set({ helpOpen: !ui.get().helpOpen, panelOpen: false, coloursOpen: false });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -122,6 +124,7 @@ export default function App() {
         <Dock />
       </div>
       <AdjustPanel />
+      <ColourPanel />
       <Intro />
       <FileInput />
       <Welcome />

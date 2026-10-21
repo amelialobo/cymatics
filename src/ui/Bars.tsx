@@ -4,6 +4,7 @@ import { TONE_MAX, TONE_MIN, type SourceKind } from '../audio/AudioEngine';
 import { toast, ui, useUI } from '../core/store';
 import { fmtTime, noteName, openFilePicker, toggleFullscreen, useAudio, useExperience } from './context';
 import { Icon, type IconName } from './icons';
+import { ColourWheelButton } from './ColourPanel';
 import { Button, IconButton, cx } from './primitives';
 
 // ------------------------------------------------------------------ top
@@ -23,7 +24,8 @@ export function TopBar() {
         <span className="ml-2 hidden text-[13px] text-muted md:inline">See what sound looks like</span>
       </div>
       <nav aria-label="Tools" className="flex items-center gap-1">
-        <IconButton icon="help" label="How it works" aria-expanded={helpOpen} onClick={() => ui.set({ helpOpen: !helpOpen, panelOpen: false })} />
+        <IconButton icon="help" label="How it works" aria-expanded={helpOpen} onClick={() => ui.set({ helpOpen: !helpOpen, panelOpen: false, coloursOpen: false })} />
+        <ColourWheelButton />
         <IconButton icon="camera" label="Save image" onClick={() => void exp?.savePNG()} />
         {document.fullscreenEnabled && <IconButton icon="expand" label="Full screen" onClick={toggleFullscreen} />}
       </nav>
@@ -90,7 +92,7 @@ export function Dock() {
             aria-expanded={panelOpen}
             aria-controls="adjust-panel"
             className="md:hidden"
-            onClick={() => ui.set({ panelOpen: !panelOpen, helpOpen: false })}
+            onClick={() => ui.set({ panelOpen: !panelOpen, helpOpen: false, coloursOpen: false })}
           />
         </div>
 
@@ -105,7 +107,7 @@ export function Dock() {
             icon="sliders"
             aria-expanded={panelOpen}
             aria-controls="adjust-panel"
-            onClick={() => ui.set({ panelOpen: !panelOpen, helpOpen: false })}
+            onClick={() => ui.set({ panelOpen: !panelOpen, helpOpen: false, coloursOpen: false })}
           >
             Adjust
           </Button>
