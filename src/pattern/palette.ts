@@ -5,37 +5,33 @@
  * instead. Blending happens in OKLab so fades stay vivid instead of muddy.
  *
  * Every palette pairs a vivid background, deep enough for contrast, with light
- * sand: sand reaches at least 4.5:1 against the brightest part of the
- * background. Keeping all sand light means a fade never dips into low contrast.
+ * sand at 4.5:1 or more against it. Keeping all sand light means a fade never dips into low contrast.
  */
 
 type RGB = [number, number, number];
 
 export interface Palette {
   name: string;
-  /** background at the centre of the plate */
-  inner: RGB;
-  /** background toward the edges */
-  outer: RGB;
+  background: RGB;
   sand: RGB;
 }
 
 const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
-const pal = (name: string, inner: string, outer: string, sand: string): Palette => ({ name, inner: hex(inner), outer: hex(outer), sand: hex(sand) });
+const pal = (name: string, background: string, sand: string): Palette => ({ name, background: hex(background), sand: hex(sand) });
 
-/** warm → cool, so neighbours always blend well. Contrast (sand : centre, sand : edge) noted. */
+/** warm → cool, so neighbours always blend well. Sand-to-background contrast noted. */
 export const PALETTES: Palette[] = [
-  pal('Amber', '#C2410C', '#6B2205', '#FFF2D2'), // 4.7 : 10.2
-  pal('Ember', '#C92E17', '#7E0D22', '#FFF3C4'), // 4.6 : 9.6
-  pal('Rose', '#D11F62', '#740A45', '#FFF7B8'), // 4.7 : 10.3
-  pal('Orchid', '#B81FD0', '#4E0C86', '#FFF6A6'), // 4.6 : 11.0
-  pal('Violet', '#6D35E8', '#25105E', '#C9FFEC'), // 5.7 : 14.5
-  pal('Cobalt', '#1F5FE0', '#0A1C72', '#FFF3A3'), // 4.9 : 13.1
-  pal('Lagoon', '#08807B', '#043A52', '#FFFBCF'), // 4.6 : 11.5
-  pal('Forest', '#1F7D37', '#093F23', '#F2FFB0'), // 4.9 : 11.3
+  pal('Amber', '#C2410C', '#FFF2D2'), // 4.7 : 1
+  pal('Ember', '#C92E17', '#FFF3C4'), // 4.6 : 1
+  pal('Rose', '#D11F62', '#FFF7B8'), // 4.7 : 1
+  pal('Orchid', '#B81FD0', '#FFF6A6'), // 4.6 : 1
+  pal('Violet', '#6D35E8', '#C9FFEC'), // 5.7 : 1
+  pal('Cobalt', '#1F5FE0', '#FFF3A3'), // 4.9 : 1
+  pal('Lagoon', '#08807B', '#FFFBCF'), // 4.6 : 1
+  pal('Forest', '#1F7D37', '#F2FFB0'), // 4.9 : 1
 ];
 
-const MONO: Palette = pal('Black and white', '#000000', '#000000', '#FFFFFF');
+const MONO: Palette = pal('Black and white', '#000000', '#FFFFFF');
 
 // ---------------------------------------------------------------- OKLab
 const toLin = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -67,8 +63,8 @@ function fromLab([L, a, b]: RGB): RGB {
 
 const mixLab = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
-const LAB = PALETTES.map((p) => ({ inner: toLab(p.inner), outer: toLab(p.outer), sand: toLab(p.sand) }));
-const MONO_LAB = { inner: toLab(MONO.inner), outer: toLab(MONO.outer), sand: toLab(MONO.sand) };
+const LAB = PALETTES.map((p) => ({ background: toLab(p.background), sand: toLab(p.sand) }));
+const MONO_LAB = { background: toLab(MONO.background), sand: toLab(MONO.sand) };
 
 // ---------------------------------------------------------------- drift
 /** where on the warm → cool scale a pitch sits: 40 Hz is the warmest, 2 kHz the coolest */
@@ -80,8 +76,8 @@ export class ColorDrift {
   pos = 2;
   /** 0 = full colour, 1 = black and white */
   mono = 0;
-  /** inner rgb, outer rgb, sand rgb (sRGB 0..1), ready for the shader */
-  readonly rgb = new Float32Array(9);
+  /** background rgb, sand rgb (sRGB 0..1), ready for the shader */
+  readonly rgb = new Float32Array(6);
   private time = Math.random() * 100;
 
   /** jump straight to the colours for this figure (no fade), e.g. on load */
@@ -134,7 +130,7 @@ export class ColorDrift {
     const f = this.pos - i;
     const t = f * f * (3 - 2 * f); // ease between neighbours
     const A = LAB[i], B = LAB[j], m = this.mono;
-    const keys = ['inner', 'outer', 'sand'] as const;
+    const keys = ['background', 'sand'] as const;
     keys.forEach((k, n) => {
       const c = fromLab(mixLab(mixLab(A[k], B[k], t), MONO_LAB[k], m));
       this.rgb[n * 3] = c[0];

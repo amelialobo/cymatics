@@ -1,6 +1,6 @@
 # Cymatics
 
-An interactive cymatics instrument. Live sound arranges about 100k–300k grains of virtual sand into Chladni figures on a vibrating steel plate, in colours that drift as the figures change.
+An interactive cymatics instrument. Live sound arranges about 150k–500k grains of virtual sand into Chladni figures on a vibrating steel plate, in colours that drift as the figures change.
 
 React · TypeScript · Vite · Tailwind CSS · Web Audio API · Three.js (WebGL2 shaders)
 
@@ -41,9 +41,9 @@ Each mode has an eigenvalue λ ≈ n² + m². Degenerate eigenvalues are nudged 
 
 **Sand** (`src/render/shaders.ts`, `simFrag`). Grain positions live in a float texture and are simulated on the GPU each frame. Each grain is thrown in proportion to |f|² (how hard the plate moves beneath it) and takes a Newton step toward the nearest nodal line f = 0. Pressing or dragging on the plate disturbs the sand.
 
-**Colour** (`src/pattern/palette.ts`). Eight palettes from warm to cool (Amber, Ember, Rose, Orchid, Violet, Cobalt, Lagoon, Forest). Each pairs a vivid background, glowing at the centre and deeper at the edges, with light sand at 4.5 : 1 contrast or more against its brightest area (typically around 7 : 1). The pitch you hear picks the colour, from 40 Hz (warm) to 2 kHz (cool), and the colours glide there in about a second. Blending happens in OKLab so the fades stay vivid. With no sound the figure picks the colour instead, drifting slowly. A "Colour" switch in Adjust returns to white sand on black.
+**Colour** (`src/pattern/palette.ts`). Eight palettes from warm to cool (Amber, Ember, Rose, Orchid, Violet, Cobalt, Lagoon, Forest). Each pairs one vivid, even background colour with light sand at 4.5 : 1 contrast or more. The pitch you hear picks the colour, from 40 Hz (warm) to 2 kHz (cool), and the colours glide there in about a second. Blending happens in OKLab so the fades stay vivid. With no sound the figure picks the colour instead, drifting slowly. A "Colour" switch in Adjust returns to white sand on black.
 
-**Rendering** (`src/render/GpuRenderer.ts`). Each frame runs four passes: the field into a half-float texture, the sand simulation, the grains accumulated into a coverage buffer, and a colour pass that paints the gradient background, a faint nodal-intensity layer (so the structure stays legible while sand moves) and the sand on top. Quality adapts by shedding grains, then resolution, when frames run long. Without WebGL2 float targets, `CpuRenderer.ts` runs the same physics on a 2D canvas.
+**Rendering** (`src/render/GpuRenderer.ts`). Each frame runs four passes: the field into a half-float texture, the sand simulation, the grains accumulated into a coverage buffer, and a colour pass that paints the background, a faint nodal-intensity layer (so the structure stays legible while sand moves) and the sand on top. Quality adapts by shedding grains, then resolution, when frames run long. Without WebGL2 float targets, `CpuRenderer.ts` runs the same physics on a 2D canvas.
 
 ## Layout
 

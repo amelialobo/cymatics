@@ -15,7 +15,7 @@ export interface FrameInput {
   impulses: Impulse[];
   /** freeze the sand */
   paused: boolean;
-  /** background centre, background edge and sand colours: 9 sRGB floats */
+  /** background and sand colours: 6 sRGB floats */
   colors: Float32Array;
 }
 
@@ -65,6 +65,6 @@ export function clientToPlate(cx: number, cy: number, w: number, h: number) {
 }
 
 export function desiredParticles(cssW: number, cssH: number, density: number, coarse: boolean) {
-  const base = cssW * cssH * (coarse ? 0.1 : 0.22);
-  return Math.round(Math.min(Math.max(base * density, 12000), coarse ? 120000 : 330000));
+  const base = cssW * cssH * (coarse ? 0.16 : 0.35);
+  return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 180000 : 520000));
 }

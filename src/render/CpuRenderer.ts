@@ -161,9 +161,8 @@ export class CpuRenderer implements PlateRenderer {
 
   private draw(colors: Float32Array) {
     const buf = this.buf!, acc = this.acc, W = this.W, H = this.H, S = this.S;
-    // a flat background halfway between the centre and edge colours keeps this path cheap
-    const br = (colors[0] + colors[3]) * 127.5, bgG = (colors[1] + colors[4]) * 127.5, bb = (colors[2] + colors[5]) * 127.5;
-    const sr = colors[6] * 255 - br, sg = colors[7] * 255 - bgG, sb = colors[8] * 255 - bb;
+    const br = colors[0] * 255, bgG = colors[1] * 255, bb = colors[2] * 255;
+    const sr = colors[3] * 255 - br, sg = colors[4] * 255 - bgG, sb = colors[5] * 255 - bb;
     buf.fill((0xff000000 | (bb << 16) | (bgG << 8) | br) >>> 0);
     acc.fill(0);
     const cx = W * 0.5, cy = H * 0.5;

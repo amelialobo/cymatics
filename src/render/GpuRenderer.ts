@@ -129,7 +129,6 @@ export class GpuRenderer implements PlateRenderer {
       uLine: { value: 0.06 },
       uHaze: { value: 0.16 },
       uBgIn: { value: new THREE.Vector3() },
-      uBgOut: { value: new THREE.Vector3() },
       uSand: { value: new THREE.Vector3(1, 1, 1) },
     };
     this.displayScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, displayFrag, this.displayU)));
@@ -176,14 +175,14 @@ export class GpuRenderer implements PlateRenderer {
     this.displayU.uSide.value = side * pr;
     (this.pointsU.uScale.value as THREE.Vector2).set(side / this.cssW, side / this.cssH);
     // grains stay about one physical grain wide at any resolution
-    this.pointsU.uPointSize.value = Math.max(1, pr * 0.78);
-    this.brightBase = pr * 0.78 < 1 ? 0.85 : 1;
+    this.pointsU.uPointSize.value = Math.max(1, pr * 1.0);
+    this.brightBase = pr < 1 ? 0.85 : 1;
     this.pointsU.uBright.value = this.brightBase * this.lift;
   }
 
   setParticleBudget(n: number) {
     // texture sides in steps of 16 keep the count tidy
-    const size = Math.max(96, Math.min(560, Math.round(Math.sqrt(n) / 16) * 16));
+    const size = Math.max(96, Math.min(720, Math.round(Math.sqrt(n) / 16) * 16));
     if (size !== this.texSize) this.allocParticles(size);
     return this.particleCount;
   }
@@ -309,8 +308,7 @@ export class GpuRenderer implements PlateRenderer {
     this.displayU.uLine.value = 0.015 + 0.035 * Math.min(1, inp.V + inp.kick);
     const c = inp.colors;
     (this.displayU.uBgIn.value as THREE.Vector3).set(c[0], c[1], c[2]);
-    (this.displayU.uBgOut.value as THREE.Vector3).set(c[3], c[4], c[5]);
-    (this.displayU.uSand.value as THREE.Vector3).set(c[6], c[7], c[8]);
+    (this.displayU.uSand.value as THREE.Vector3).set(c[3], c[4], c[5]);
     this.composite();
   }
 

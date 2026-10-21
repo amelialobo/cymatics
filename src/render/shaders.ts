@@ -154,8 +154,7 @@ uniform vec2 uRes;    // drawing buffer, device px
 uniform float uSide;  // plate side, device px
 uniform float uLine;  // strength of the nodal-intensity lines
 uniform float uHaze;  // antinode haze
-uniform vec3 uBgIn;   // background, centre
-uniform vec3 uBgOut;  // background, edges
+uniform vec3 uBgIn;   // background
 uniform vec3 uSand;
 
 float field(vec2 uv) { return texture2D(uField, uv).r; }
@@ -173,9 +172,8 @@ void main() {
   float line = exp(-pow(d / (px * 2.2), 2.0)) * uLine;
   float haze = pow(abs(f), 3.0) * uHaze;
 
-  // a soft glow from the centre of the plate out to deeper edges
-  vec2 q = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * max(uRes.x, uRes.y));
-  vec3 bg = mix(uBgIn, uBgOut, smoothstep(0.0, 1.3, length(q)));
+  // one even background colour across the whole plate
+  vec3 bg = uBgIn;
   // antinodes catch a little light; the nodal lines show faintly in the sand colour
   bg = mix(bg, mix(uBgIn, vec3(1.0), 0.25), haze);
   bg = mix(bg, uSand, line);
