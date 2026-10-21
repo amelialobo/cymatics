@@ -270,11 +270,16 @@ function MicDock() {
               <span className="breathe h-2 w-2 rounded-full bg-white" aria-hidden />
               Listening
             </span>
-            <span className="text-[13px] text-muted">Hum, sing or whistle</span>
+            {!mic.silent && <span className="text-[13px] text-muted">Hum, sing or whistle</span>}
           </div>
           <span className="mt-2.5 block h-1 overflow-hidden rounded-full bg-[#333]" role="meter" aria-label="Input level">
             <span ref={meter} className="block h-full origin-left rounded-full bg-white" style={{ transform: 'scaleX(0)' }} />
           </span>
+          {mic.silent && (
+            <span role="status" className="mt-2 block text-[13px] leading-snug text-white">
+              {mic.message}
+            </span>
+          )}
         </div>
       </div>
     );

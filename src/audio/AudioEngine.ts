@@ -42,7 +42,8 @@ export type MicStatus = 'off' | 'requesting' | 'on' | 'denied' | 'unavailable';
 export interface AudioSnapshot {
   source: SourceKind | null;
   tone: { running: boolean; freq: number; wave: Waveform; amp: number; listen: boolean };
-  mic: { status: MicStatus; message: string };
+  /** `silent`: the mic is on but no sound has reached the analyser for a while */
+  mic: { status: MicStatus; message: string; silent?: boolean };
   file: { name: string; loaded: boolean; playing: boolean; duration: number; time: number };
 }
 
@@ -76,6 +77,7 @@ export class AudioEngine {
   private micNode: MediaStreamAudioSourceNode | null = null;
   private micGain: GainNode | null = null;
   private micGainValue = 2;
+  private micSilentFor = 0;
 
   private hold = { band: 0.05, rms: 0.05, fluxAvg: 0 };
   private lastOnset = 0;
@@ -118,6 +120,11 @@ export class AudioEngine {
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AC) throw new Error('Web Audio is not supported in this browser.');
     const ctx = (this.ctx = new AC());
+    // the browser can pause the context behind our back (Safari when capture
+    // starts, any browser when the audio device changes): wake it while a source plays
+    ctx.addEventListener('statechange', () => {
+      if (ctx.state !== 'running' && ctx.state !== 'closed' && this.state.source) void ctx.resume().catch(() => {});
+    });
     this.input = ctx.createGain();
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = FFT_SIZE;
@@ -301,6 +308,8 @@ export class AudioEngine {
       this.micNode.connect(this.micGain);
       this.micGain.connect(this.input); // never to the speakers: no feedback
       stream.getAudioTracks()[0]?.addEventListener('ended', () => this.stopMic());
+      this.micSilentFor = 0;
+      if (ctx.state !== 'running') await ctx.resume().catch(() => {});
       this.emit({ source: 'live', mic: { status: 'on', message: 'Listening. Nothing is recorded or sent.' } });
     } catch (err) {
       const name = (err as DOMException)?.name;
@@ -333,6 +342,24 @@ export class AudioEngine {
   setMicGain(g: number) {
     this.micGainValue = g;
     if (this.micGain && this.ctx) this.micGain.gain.setTargetAtTime(g, this.ctx.currentTime, 0.03);
+  }
+
+  /** say so when the mic is on but nothing arrives: a paused context, a muted or wrong input */
+  private watchMicSilence(dt: number, rms: number) {
+    const dead = rms < 1e-5 || this.ctx?.state !== 'running';
+    this.micSilentFor = dead ? this.micSilentFor + dt : 0;
+    const silent = this.micSilentFor > 3;
+    if (silent === !!this.state.mic.silent) return;
+    if (silent && this.ctx?.state !== 'running') void this.ctx?.resume().catch(() => {});
+    this.emit({
+      mic: {
+        ...this.state.mic,
+        silent,
+        message: silent
+          ? 'No sound is arriving. Check the input in System Settings → Sound, or that the mic isn’t muted.'
+          : 'Listening. Nothing is recorded or sent.',
+      },
+    });
   }
 
   // -------------------------------------------------------------- analysis
@@ -383,6 +410,7 @@ export class AudioEngine {
     }
 
     const silent = rms < 0.0015;
+    if (this.state.source === 'live') this.watchMicSilence(dt, rms);
 
     // the bands share one slow automatic gain so their proportions survive
     const bL = Math.sqrt(eL), bM = Math.sqrt(eM) * 1.4, bH = Math.sqrt(eH) * 2.6;
