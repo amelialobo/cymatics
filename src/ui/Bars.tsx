@@ -11,14 +11,17 @@ import { Button, IconButton, cx } from './primitives';
 export function InfoButton() {
   const helpOpen = useUI((s) => s.helpOpen);
   return (
-    <IconButton
-      icon="info"
-      label="How it works"
+    // bare icon, no container: IconButton's hover fill would bring the circle back
+    <button
+      aria-label="How it works"
+      title="How it works"
       aria-expanded={helpOpen}
       onClick={() => ui.set({ helpOpen: !helpOpen, panelOpen: false, coloursOpen: false })}
-      className="fixed right-3 z-20 bg-black/30 text-white/80 ring-1 ring-white/15 backdrop-blur-md hover:bg-black/50 aria-expanded:bg-black/50 md:right-4"
+      className="fixed right-3 z-20 grid h-11 w-11 cursor-pointer place-items-center text-white/45 transition-colors duration-200 hover:text-white/80 active:opacity-80 aria-expanded:text-white/80 md:right-4"
       style={{ top: 'calc(env(safe-area-inset-top) + 12px)' }}
-    />
+    >
+      <Icon name="info" />
+    </button>
   );
 }
 
