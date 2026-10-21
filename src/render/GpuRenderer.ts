@@ -44,6 +44,8 @@ export class GpuRenderer implements PlateRenderer {
   private texSize = 0;
   private frameNo = 0;
 
+  /** how much sand lands on each screen pixel; the colour pass reads it */
+  private accumRT: THREE.WebGLRenderTarget;
   private displayScene = new THREE.Scene();
   private displayU: Uniforms;
   private pointsScene = new THREE.Scene();
@@ -76,6 +78,14 @@ export class GpuRenderer implements PlateRenderer {
       depthBuffer: false,
       wrapS: THREE.ClampToEdgeWrapping,
       wrapT: THREE.ClampToEdgeWrapping,
+    });
+
+    this.accumRT = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      format: THREE.RGBAFormat,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: false,
     });
 
     const noise = new Float32Array(32);
@@ -111,11 +121,15 @@ export class GpuRenderer implements PlateRenderer {
 
     this.displayU = {
       uField: { value: this.fieldRT.texture },
+      uAccum: { value: this.accumRT.texture },
       uFieldTexel: { value: 1 / FIELD_RES },
       uRes: { value: new THREE.Vector2() },
       uSide: { value: 1 },
       uLine: { value: 0.06 },
-      uHaze: { value: 0.07 },
+      uHaze: { value: 0.28 },
+      uBgIn: { value: new THREE.Vector3() },
+      uBgOut: { value: new THREE.Vector3() },
+      uSand: { value: new THREE.Vector3(1, 1, 1) },
     };
     this.displayScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, displayFrag, this.displayU)));
 
@@ -153,7 +167,9 @@ export class GpuRenderer implements PlateRenderer {
   private syncSizeUniforms(exportScale: number) {
     const pr = this.pixelRatio() * exportScale;
     const { side } = plateLayout(this.cssW, this.cssH);
-    (this.displayU.uRes.value as THREE.Vector2).set(this.cssW * pr, this.cssH * pr);
+    const bw = Math.round(this.cssW * pr), bh = Math.round(this.cssH * pr);
+    (this.displayU.uRes.value as THREE.Vector2).set(bw, bh);
+    if (this.accumRT.width !== bw || this.accumRT.height !== bh) this.accumRT.setSize(bw, bh);
     this.displayU.uSide.value = side * pr;
     (this.pointsU.uScale.value as THREE.Vector2).set(side / this.cssW, side / this.cssH);
     // grains stay about one physical grain wide at any resolution
@@ -283,16 +299,29 @@ export class GpuRenderer implements PlateRenderer {
   }
 
   private draw(inp: FrameInput) {
-    this.pointsU.uPos.value = this.posTex;
     // intricate figures spread the same sand over far more line: lift it a little
     this.lift = Math.min(1.55, Math.max(1, 0.9 + inp.bank.meanLambda() / 110));
     this.pointsU.uBright.value = this.brightBase * this.lift;
     // the nodal field shows through more while the sand is in motion
     this.displayU.uLine.value = 0.025 + 0.06 * Math.min(1, inp.V + inp.kick);
+    const c = inp.colors;
+    (this.displayU.uBgIn.value as THREE.Vector3).set(c[0], c[1], c[2]);
+    (this.displayU.uBgOut.value as THREE.Vector3).set(c[3], c[4], c[5]);
+    (this.displayU.uSand.value as THREE.Vector3).set(c[6], c[7], c[8]);
+    this.composite();
+  }
+
+  /** sand into the coverage buffer, then colour everything in one pass */
+  private composite() {
+    this.pointsU.uPos.value = this.posTex;
+    this.gl.setRenderTarget(this.accumRT);
+    this.gl.setClearColor(0x000000, 0);
+    this.gl.clear();
+    this.gl.render(this.pointsScene, this.camera);
     this.gl.setRenderTarget(null);
+    this.gl.setClearColor(0x000000, 1);
     this.gl.clear();
     this.gl.render(this.displayScene, this.camera);
-    this.gl.render(this.pointsScene, this.camera);
   }
 
   frame(inp: FrameInput) {
@@ -318,11 +347,7 @@ export class GpuRenderer implements PlateRenderer {
     this.gl.setPixelRatio(base * scale);
     this.gl.setSize(this.cssW, this.cssH, false);
     this.syncSizeUniforms(scale);
-    this.pointsU.uPos.value = this.posTex;
-    this.gl.setRenderTarget(null);
-    this.gl.clear();
-    this.gl.render(this.displayScene, this.camera);
-    this.gl.render(this.pointsScene, this.camera);
+    this.composite();
     // read back synchronously, before the browser composites and clears the buffer
     const url = this.canvas.toDataURL('image/png');
     this.gl.setPixelRatio(base);
@@ -334,6 +359,7 @@ export class GpuRenderer implements PlateRenderer {
 
   dispose() {
     this.fieldRT.dispose();
+    this.accumRT.dispose();
     this.posRT.forEach((rt) => rt.dispose());
     this.seedTex?.dispose();
     this.quad.dispose();

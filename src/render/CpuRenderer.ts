@@ -20,6 +20,7 @@ export class CpuRenderer implements PlateRenderer {
   private ctx: CanvasRenderingContext2D;
   private img: ImageData | null = null;
   private buf: Uint32Array | null = null;
+  private acc = new Float32Array(0);
   private G = new Float32Array(N * N);
   private px = new Float32Array(0);
   private py = new Float32Array(0);
@@ -58,6 +59,7 @@ export class CpuRenderer implements PlateRenderer {
     this.canvas.height = this.H;
     this.img = this.ctx.createImageData(this.W, this.H);
     this.buf = new Uint32Array(this.img.data.buffer);
+    this.acc = new Float32Array(this.W * this.H);
     const { side, bx, by } = plateLayout(this.cssW, this.cssH);
     this.S = (side * rs) / 2;
     this.bx = bx;
@@ -157,32 +159,37 @@ export class CpuRenderer implements PlateRenderer {
     }
   }
 
-  private draw() {
-    const buf = this.buf!, W = this.W, H = this.H, S = this.S;
-    buf.fill(0xff000000);
+  private draw(colors: Float32Array) {
+    const buf = this.buf!, acc = this.acc, W = this.W, H = this.H, S = this.S;
+    // a flat background halfway between the centre and edge colours keeps this path cheap
+    const br = (colors[0] + colors[3]) * 127.5, bgG = (colors[1] + colors[4]) * 127.5, bb = (colors[2] + colors[5]) * 127.5;
+    const sr = colors[6] * 255 - br, sg = colors[7] * 255 - bgG, sb = colors[8] * 255 - bb;
+    buf.fill((0xff000000 | (bb << 16) | (bgG << 8) | br) >>> 0);
+    acc.fill(0);
     const cx = W * 0.5, cy = H * 0.5;
     const { px, py, pb, count } = this;
     for (let k = 0; k < count; k++) {
       const sx = (cx + px[k] * S) | 0, sy = (cy - py[k] * S) | 0;
       if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
       const idx = sy * W + sx;
-      let v = (buf[idx] & 255) + pb[k];
-      if (v > 255) v = 255;
-      buf[idx] = 0xff000000 | (v << 16) | (v << 8) | v;
+      const a = (acc[idx] += pb[k] / 255);
+      const t = 1 - Math.exp(-2.2 * a);
+      buf[idx] = 0xff000000 | (((bb + sb * t) | 0) << 16) | (((bgG + sg * t) | 0) << 8) | ((br + sr * t) | 0);
     }
     this.ctx.putImageData(this.img!, 0, 0);
   }
 
+
   frame(inp: FrameInput) {
     this.computeField(inp);
     if (!inp.paused) this.step(inp);
-    this.draw();
+    this.draw(inp.colors);
   }
 
   presettle(inp: FrameInput, steps: number) {
     this.computeField(inp);
     for (let i = 0; i < steps; i++) this.step(inp);
-    this.draw();
+    this.draw(inp.colors);
   }
 
   exportPNG(): Promise<Blob> {

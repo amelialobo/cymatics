@@ -1,6 +1,6 @@
 # Cymatics
 
-An interactive cymatics instrument. Live sound arranges about 100k–300k grains of virtual sand into Chladni figures on a black steel plate.
+An interactive cymatics instrument. Live sound arranges about 100k–300k grains of virtual sand into Chladni figures on a vibrating steel plate, in colours that drift as the figures change.
 
 React · TypeScript · Vite · Tailwind CSS · Web Audio API · Three.js (WebGL2 shaders)
 
@@ -41,7 +41,9 @@ Each mode has an eigenvalue λ ≈ n² + m². Degenerate eigenvalues are nudged 
 
 **Sand** (`src/render/shaders.ts`, `simFrag`). Grain positions live in a float texture and are simulated on the GPU each frame. Each grain is thrown in proportion to |f|² (how hard the plate moves beneath it) and takes a Newton step toward the nearest nodal line f = 0. Pressing or dragging on the plate disturbs the sand.
 
-**Rendering** (`src/render/GpuRenderer.ts`). Each frame runs four passes: the field into a half-float texture, the sand simulation, a faint continuous nodal-intensity layer (so the structure stays legible while sand moves), and the grains as additive points. Quality adapts by shedding grains, then resolution, when frames run long. Without WebGL2 float targets, `CpuRenderer.ts` runs the same physics on a 2D canvas.
+**Colour** (`src/pattern/palette.ts`). Eight palettes in hue order (Citrus, Sunset, Flamingo, Magenta, Ultraviolet, Sky, Lagoon, Lime). Each one pairs a glowing centre and deeper edge background with a sand colour chosen to stand out on both. The figure the sand is drawing picks a position along them: simple, low figures are warm and intricate, high ones cool. The colours glide there over a few seconds, blended in OKLab so the fades stay vivid. A "Colour" switch in Adjust returns to white sand on black.
+
+**Rendering** (`src/render/GpuRenderer.ts`). Each frame runs four passes: the field into a half-float texture, the sand simulation, the grains accumulated into a coverage buffer, and a colour pass that paints the gradient background, a faint nodal-intensity layer (so the structure stays legible while sand moves) and the sand on top. Quality adapts by shedding grains, then resolution, when frames run long. Without WebGL2 float targets, `CpuRenderer.ts` runs the same physics on a 2D canvas.
 
 ## Layout
 
@@ -49,6 +51,7 @@ Each mode has an eigenvalue λ ≈ n² + m². Degenerate eigenvalues are nudged 
 src/audio/AudioEngine.ts     sources (mic, file, tone) and feature extraction
 src/pattern/modes.ts         eigenmodes, symmetry families, CPU field (mirrors the shader)
 src/pattern/driver.ts        sound → mode targets, vibration, kicks
+src/pattern/palette.ts       colour palettes and the drift that follows the sand
 src/render/shaders.ts        GLSL: field, sand simulation, nodal layer, grains
 src/render/GpuRenderer.ts    Three.js renderer, adaptive quality, PNG export
 src/render/CpuRenderer.ts    fallback renderer

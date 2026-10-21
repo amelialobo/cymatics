@@ -113,6 +113,12 @@ export function AdjustPanel() {
 
           <Group title="Display">
             <Switch
+              label="Colour"
+              hint={p.colour ? 'Colours drift as the sand changes shape.' : 'Classic white sand on black.'}
+              checked={p.colour}
+              onChange={(colour) => setParams({ colour })}
+            />
+            <Switch
               label="Show sound details"
               hint="Pitch, volume and pattern readout"
               checked={details}

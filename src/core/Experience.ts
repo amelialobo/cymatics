@@ -5,6 +5,7 @@
  */
 import { AudioEngine, TONE_MAX, TONE_MIN } from '../audio/AudioEngine';
 import { ModeBank, SYMMETRIES } from '../pattern/modes';
+import { ColorDrift } from '../pattern/palette';
 import { PatternDriver } from '../pattern/driver';
 import { CpuRenderer } from '../render/CpuRenderer';
 import { GpuRenderer, gpuSupported } from '../render/GpuRenderer';
@@ -29,6 +30,7 @@ export class Experience {
   readonly audio = new AudioEngine();
   readonly bank = new ModeBank();
   readonly driver: PatternDriver;
+  readonly color = new ColorDrift();
   renderer: PlateRenderer | null = null;
 
   private raf = 0;
@@ -58,6 +60,7 @@ export class Experience {
     this.input = {
       dt: 1 / 60, bank: this.bank, symmetry: p.symmetry, V: 0, kick: 0,
       stability: 0, response: p.response, impulses: this.impulses, paused: false,
+      colors: this.color.rgb,
     };
 
     this.ro = new ResizeObserver(() => this.resize());
@@ -124,6 +127,7 @@ export class Experience {
     this.bank.snap();
     this.bank.pack();
     for (let i = 0; i < 8; i++) this.bank.normalise(p.symmetry);
+    this.color.snap(this.bank.meanLambda(), p.colour);
     r.presettle({ ...this.input, V: 0.6, kick: 0, dt: 1 / 60, stability: 0.6 }, 150);
     this.driver.V = 0.4;
     this.last = performance.now();
@@ -153,6 +157,8 @@ export class Experience {
     }
     this.bank.pack();
     this.bank.normalise(p.symmetry);
+    // the colours follow the figure the sand is drawing
+    this.color.update(dt, this.bank.meanLambda(), p.colour, this.reduced);
 
     this.impulses.length = 0;
     this.pointers.forEach((im) => this.impulses.push(im));

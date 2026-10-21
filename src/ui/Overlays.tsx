@@ -281,7 +281,7 @@ export function Bolt() {
       style={{
         background:
           'radial-gradient(circle at 50% 50%, #0b0b0b 0 22%, transparent 24%), radial-gradient(circle at 38% 32%, #f2f2f2 0, #999 32%, #3a3a3a 62%, #111 80%)',
-        boxShadow: '0 0 0 4px rgba(0,0,0,.92), 0 0 0 5px rgba(255,255,255,.14), 0 0 18px 6px #000',
+        boxShadow: '0 0 0 3px rgba(0,0,0,.35), 0 0 0 4px rgba(255,255,255,.25), 0 2px 10px 2px rgba(0,0,0,.3)',
       }}
     />
   );

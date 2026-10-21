@@ -15,6 +15,8 @@ export interface FrameInput {
   impulses: Impulse[];
   /** freeze the sand */
   paused: boolean;
+  /** background centre, background edge and sand colours: 9 sRGB floats */
+  colors: Float32Array;
 }
 
 export interface PlateRenderer {

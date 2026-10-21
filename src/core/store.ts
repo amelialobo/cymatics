@@ -13,6 +13,8 @@ export interface VisualParams {
   /** 'audio': sound shapes the figure. 'manual': the sliders do. */
   drive: 'audio' | 'manual';
   paused: boolean;
+  /** colour that follows the sand, or black and white */
+  colour: boolean;
 }
 
 export const DEFAULT_PARAMS: VisualParams = {
@@ -22,6 +24,7 @@ export const DEFAULT_PARAMS: VisualParams = {
   symmetry: 'square',
   drive: 'audio',
   paused: false,
+  colour: true,
 };
 
 export interface UIState {

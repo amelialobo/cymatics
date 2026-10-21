@@ -4,8 +4,8 @@
  * Passes per frame:
  *  1. fieldFrag    standing-wave field → half-float texture (normalised to -1..1)
  *  2. simFrag      sand simulation: ping-pong float texture of grain positions
- *  3. displayFrag  faint continuous nodal-intensity field beneath the sand
- *  4. pointsVert   grains drawn as additive points straight from the position texture
+ *  3. pointsVert   grains accumulated as additive points into a coverage buffer
+ *  4. displayFrag  colour: gradient background, faint nodal-intensity lines, sand on top
  */
 import { MAX_ACTIVE } from '../pattern/modes';
 
@@ -148,19 +148,21 @@ void main() {
 export const displayFrag = /* glsl */ `
 precision highp float;
 uniform sampler2D uField;
+uniform sampler2D uAccum;   // how much sand landed on each pixel
 uniform float uFieldTexel;
 uniform vec2 uRes;    // drawing buffer, device px
 uniform float uSide;  // plate side, device px
 uniform float uLine;  // strength of the nodal-intensity lines
 uniform float uHaze;  // antinode haze
+uniform vec3 uBgIn;   // background, centre
+uniform vec3 uBgOut;  // background, edges
+uniform vec3 uSand;
 
 float field(vec2 uv) { return texture2D(uField, uv).r; }
 
 void main() {
   vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * uSide);
-  float edge = max(abs(p.x), abs(p.y));
-  if (edge > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  vec2 uv = p * 0.5 + 0.5;
+  vec2 uv = clamp(p * 0.5 + 0.5, 0.0, 1.0);
   float h = uFieldTexel;
   float f = field(uv);
   vec2 g = vec2(field(uv + vec2(h, 0.0)) - field(uv - vec2(h, 0.0)),
@@ -170,8 +172,17 @@ void main() {
   float px = 2.0 / uSide;
   float line = exp(-pow(d / (px * 2.2), 2.0)) * uLine;
   float haze = pow(abs(f), 3.0) * uHaze;
-  float fade = smoothstep(1.0, 0.99, edge);
-  gl_FragColor = vec4(vec3((line + haze) * fade), 1.0);
+
+  // a soft glow from the centre of the plate out to deeper edges
+  vec2 q = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * max(uRes.x, uRes.y));
+  vec3 bg = mix(uBgIn, uBgOut, smoothstep(0.0, 1.3, length(q)));
+  // antinodes catch a little light; the nodal lines show faintly in the sand colour
+  bg = mix(bg, mix(uBgIn, vec3(1.0), 0.25), haze);
+  bg = mix(bg, uSand, line);
+
+  float a = texture2D(uAccum, gl_FragCoord.xy / uRes).r;
+  float cover = 1.0 - exp(-2.2 * a);
+  gl_FragColor = vec4(mix(bg, uSand, cover), 1.0);
 }`;
 
 export const pointsVert = /* glsl */ `
