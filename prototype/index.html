@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cymatics</title>
+  <meta name="description" content="An interactive cymatics installation: live sound arranges virtual sand into Chladni figures on a vibrating steel plate.">
+  <meta name="theme-color" content="#000000">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <main id="stage" aria-label="Vibrating plate. Press or drag to disturb the sand.">
+    <canvas id="haze" aria-hidden="true"></canvas>
+    <canvas id="sand"></canvas>
+    <canvas id="glow" aria-hidden="true"></canvas>
+    <div id="bolt" aria-hidden="true"></div>
+    <div id="vignette" aria-hidden="true"></div>
+  </main>
+
+  <header class="ui top">
+    <div class="title">
+      <h1>Cymatics</h1>
+      <p>sand&nbsp;·&nbsp;steel plate&nbsp;·&nbsp;sound</p>
+    </div>
+
+    <div class="hud" id="hud" aria-live="off">
+      <div class="row"><span>Source</span><b id="h-src">idle drive</b></div>
+      <div class="row"><span>Dominant</span><b id="h-dom">—</b></div>
+      <div class="row hide-sm"><span>Centroid</span><b id="h-cen">—</b></div>
+      <div class="row hide-sm"><span>Level</span><b id="h-rms">—</b></div>
+      <div class="row"><span>Mode</span><b id="h-mode">—</b></div>
+      <div class="bands hide-sm">
+        <div class="band"><span>Low</span><div class="bar"><i id="b-low"></i></div></div>
+        <div class="band"><span>Mid</span><div class="bar"><i id="b-mid"></i></div></div>
+        <div class="band"><span>High</span><div class="bar"><i id="b-high"></i></div></div>
+      </div>
+      <canvas id="spectrum" class="hide-sm" width="420" height="80" aria-hidden="true"></canvas>
+    </div>
+  </header>
+
+  <p class="ui hint" id="hint">The plate is resting on an idle drive. Choose a sound source to shape the sand.</p>
+
+  <footer class="ui dock" id="dock">
+    <nav class="sources" role="tablist" aria-label="Sound source">
+      <button role="tab" data-tab="mic" aria-selected="false"><i class="dot"></i>Microphone</button>
+      <button role="tab" data-tab="file" aria-selected="false"><i class="dot"></i>Audio file</button>
+      <button role="tab" data-tab="tone" aria-selected="false"><i class="dot"></i>Tone</button>
+    </nav>
+
+    <div class="panels">
+      <section class="panel" data-panel="none">
+        <p class="lede">No source yet. Sand moves only when the plate vibrates. Pick a source: a live microphone, a track of your own, or a pure tone to look for resonances.</p>
+      </section>
+
+      <section class="panel" data-panel="mic" hidden>
+        <div class="group">
+          <button class="btn primary" id="mic-toggle">Enable microphone</button>
+          <span class="status" id="mic-status">Off. Nothing is recorded or sent anywhere.</span>
+        </div>
+        <label class="field">
+          <span>Input gain <output id="mic-gain-out">×2.0</output></span>
+          <input type="range" id="mic-gain" min="0" max="100" value="40">
+        </label>
+      </section>
+
+      <section class="panel" data-panel="file" hidden>
+        <div class="group">
+          <label class="btn primary" for="file-input" tabindex="0">Choose audio</label>
+          <input type="file" id="file-input" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" hidden>
+          <button class="btn" id="file-play" disabled>Play</button>
+          <span class="status ellipsis" id="file-name">MP3, WAV, OGG or M4A. You can also drop a file anywhere.</span>
+        </div>
+        <div class="seek">
+          <span id="file-time">0:00</span>
+          <input type="range" id="file-seek" min="0" max="1000" value="0" disabled aria-label="Seek">
+          <span id="file-dur">0:00</span>
+          <label class="field inline"><span>Listen</span><input type="range" id="file-vol" min="0" max="100" value="80" aria-label="Playback volume"></label>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="tone" hidden>
+        <div class="tone-top">
+          <div class="readout"><output id="tone-hz">220.0</output><small>Hz</small><em id="tone-note">A3</em></div>
+          <div class="group">
+            <button class="btn primary" id="tone-toggle">Start tone</button>
+            <button class="btn" id="tone-sweep" aria-pressed="false">Sweep</button>
+            <button class="btn" id="tone-listen" aria-pressed="true">Listen</button>
+          </div>
+        </div>
+        <div class="freq-row">
+          <button class="btn tiny" id="tone-down" aria-label="Down one semitone">−</button>
+          <input type="range" id="tone-freq" min="0" max="1000" value="451" aria-label="Frequency">
+          <button class="btn tiny" id="tone-up" aria-label="Up one semitone">+</button>
+        </div>
+        <div class="group spread">
+          <div class="seg" id="tone-wave" role="radiogroup" aria-label="Waveform">
+            <button data-wave="sine" aria-checked="true" role="radio">Sine</button>
+            <button data-wave="triangle" aria-checked="false" role="radio">Tri</button>
+            <button data-wave="square" aria-checked="false" role="radio">Square</button>
+            <button data-wave="sawtooth" aria-checked="false" role="radio">Saw</button>
+          </div>
+          <label class="field inline"><span>Amplitude</span><input type="range" id="tone-amp" min="0" max="100" value="50"></label>
+          <div class="resonance"><span>Resonance</span><div class="meter"><i id="tone-res"></i></div></div>
+        </div>
+        <div class="presets" id="tone-presets"><span>Eigenmodes</span></div>
+      </section>
+    </div>
+
+    <div class="tools">
+      <button class="tool" id="t-scatter" title="Scatter sand (R)" aria-label="Scatter sand">
+        <svg viewBox="0 0 24 24"><circle cx="6" cy="7" r="1.3"/><circle cx="13" cy="5" r="1.3"/><circle cx="18" cy="10" r="1.3"/><circle cx="9" cy="13" r="1.3"/><circle cx="16" cy="17" r="1.3"/><circle cx="6" cy="19" r="1.3"/></svg>
+      </button>
+      <button class="tool" id="t-adjust" title="Adjust" aria-label="Adjust" aria-expanded="false" aria-controls="adjust">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.4"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
+      <button class="tool" id="t-shot" title="Save image (S)" aria-label="Save image">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.4"><rect x="3" y="6" width="18" height="13" rx="1"/><circle cx="12" cy="12.5" r="3.6"/><path d="M8.5 6l1.5-2h4l1.5 2"/></svg>
+      </button>
+      <button class="tool" id="t-full" title="Fullscreen (F)" aria-label="Fullscreen">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.4"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+      <button class="tool" id="t-hide" title="Hide interface (H)" aria-label="Hide interface">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.4"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>
+      </button>
+
+    </div>
+  </footer>
+
+  <div class="ui drawer" id="adjust" hidden>
+    <label class="field"><span>Sensitivity <output id="o-sens">1.00</output></span><input type="range" id="a-sens" min="20" max="250" value="100"></label>
+    <label class="field"><span>Grain <output id="o-dens">—</output></span><input type="range" id="a-dens" min="30" max="220" value="100"></label>
+    <label class="field"><span>Response <output id="o-resp">1.00</output></span><input type="range" id="a-resp" min="25" max="250" value="100"></label>
+    <p class="keys">Space play / tone · ← → semitone · R scatter · S save · F fullscreen · H hide</p>
+  </div>
+
+  <button class="show-ui" id="show-ui" aria-label="Show interface">Show interface</button>
+  <div class="drop" id="drop" aria-hidden="true"><p>Drop audio onto the plate</p></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/audio.js"></script>
+  <script src="js/plate.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
