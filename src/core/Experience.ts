@@ -145,12 +145,17 @@ export class Experience {
     if (this.reduced) {
       // no shaking: the word is simply there
       this.intro.t = 2.4;
-      r.presettle({ ...this.input, V: 0.32, kick: 0, dt: 1 / 60, stability: 0.6, titleMix: 1, titleGain: 1 }, 90);
+      this.presettleTitle();
     }
     this.driver.V = 0.4;
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
     window.setTimeout(() => ui.set({ loading: false }), 350);
+  }
+
+  /** reduced motion: settle the word out of sight instead of shaking it into place */
+  private presettleTitle() {
+    this.renderer?.presettle({ ...this.input, V: 0.32, kick: 0, dt: 1 / 60, stability: 0.6, titleMix: 1, titleGain: 1 }, 90);
   }
 
   private buildTitle() {
@@ -170,7 +175,13 @@ export class Experience {
       const n = this.renderer.setParticleBudget(desiredParticles(w, h, ui.get().params.density, this.coarse));
       if (n !== ui.get().particleCount) ui.set({ particleCount: n });
     }
-    if (this.intro.mask && this.intro.phase === 'title') this.buildTitle();
+    if (this.intro.mask && this.intro.phase === 'title') {
+      this.buildTitle();
+      // the sand was sprinkled over the old visible area (on phones the dock
+      // arrives after the first layout and widens it); spread it edge to edge
+      this.renderer?.scatter();
+      if (this.reduced) this.presettleTitle();
+    }
   }
 
   /**
