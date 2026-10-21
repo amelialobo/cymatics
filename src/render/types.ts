@@ -38,9 +38,9 @@ export interface PlateRenderer {
 /** Sand physics constants, in plate units (the plate spans -1..1), per 60 Hz frame. */
 export const TUNE = {
   jitter: 0.018,
-  diffuse: 0.0085,
-  pull: 0.08,
-  maxStep: 0.006,
+  diffuse: 0.0105,
+  pull: 0.28,
+  maxStep: 0.018,
   kick: 0.014,
 };
 

@@ -133,7 +133,7 @@ export class ModeBank {
 
   /** ease the mode weights toward their targets: lines dissolve and re-form */
   update(dt: number, response: number) {
-    const k = 1 - Math.exp(-dt * 3.2 * response);
+    const k = 1 - Math.exp(-dt * 7 * response);
     const { w, target } = this;
     for (let i = 0; i < w.length; i++) {
       const d = target[i] - w[i];
@@ -143,7 +143,7 @@ export class ModeBank {
       }
     }
     const r = this.radial;
-    const kr = 1 - Math.exp(-dt * 1.5 * response);
+    const kr = 1 - Math.exp(-dt * 4 * response);
     r.w += (r.tw - r.w) * kr;
     r.k += (r.tk - r.k) * kr;
     r.p += (r.tp - r.p) * kr;

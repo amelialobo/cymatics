@@ -1,11 +1,14 @@
 /**
- * Colour that follows the sound. Palettes sit in hue order from warm to cool;
- * the pitch you hear picks a position along them (low notes warm, high notes
- * cool), and the colours glide there. With no sound, the plate's figure picks
- * instead. Blending happens in OKLab so fades stay vivid instead of muddy.
+ * Colour that follows the sound. The pitch you hear picks a position along the
+ * palettes (low notes first, high notes last) and the colours glide there.
+ * With no sound, the plate's figure picks instead. Blending happens in OKLab
+ * so fades stay vivid instead of muddy.
  *
- * Every palette pairs a vivid background, deep enough for contrast, with light
- * sand at 4.5:1 or more against it. Keeping all sand light means a fade never dips into low contrast.
+ * Half the palettes are light backgrounds with dark sand, half deep
+ * backgrounds with light sand. Between two palettes of opposite polarity the
+ * hues fade smoothly but the lightness flips quickly at the midpoint, and a
+ * contrast floor keeps the sand clearly lighter or darker than the background
+ * at every moment of a fade.
  */
 
 type RGB = [number, number, number];
@@ -19,19 +22,19 @@ export interface Palette {
 const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 const pal = (name: string, background: string, sand: string): Palette => ({ name, background: hex(background), sand: hex(sand) });
 
-/** warm → cool, so neighbours always blend well. Sand-to-background contrast noted. */
+/** low pitch → high pitch. Polarity alternates; sand-to-background contrast noted. */
 export const PALETTES: Palette[] = [
-  pal('Amber', '#C2410C', '#FFF2D2'), // 4.7 : 1
-  pal('Ember', '#C92E17', '#FFF3C4'), // 4.6 : 1
-  pal('Rose', '#D11F62', '#FFF7B8'), // 4.7 : 1
-  pal('Orchid', '#B81FD0', '#FFF6A6'), // 4.6 : 1
-  pal('Violet', '#6D35E8', '#C9FFEC'), // 5.7 : 1
-  pal('Cobalt', '#1F5FE0', '#FFF3A3'), // 4.9 : 1
-  pal('Lagoon', '#08807B', '#FFFBCF'), // 4.6 : 1
-  pal('Forest', '#1F7D37', '#F2FFB0'), // 4.9 : 1
+  pal('Peach & Plum', '#FFD3B6', '#4A1942'), // light, 10.1 : 1
+  pal('Burgundy & Blush', '#4A0E1F', '#FFC2D1'), // dark, 10.1 : 1
+  pal('Butter & Cobalt', '#FFE7A3', '#1E3A8A'), // light, 8.5 : 1
+  pal('Charcoal & Gold', '#1F1F24', '#F2C14E'), // dark, 9.8 : 1
+  pal('Mint & Forest', '#CDEFD9', '#0E3B2E'), // light, 10.1 : 1
+  pal('Forest & Lime', '#12372A', '#D4F27A'), // dark, 10.5 : 1
+  pal('Teal & Sand', '#0F4C5C', '#F6D8AE'), // dark, 7.0 : 1
+  pal('Sky & Navy', '#CFE8FF', '#0B2545'), // light, 12.2 : 1
+  pal('Midnight & Coral', '#14213D', '#FF8C69'), // dark, 7.0 : 1
+  pal('Lilac & Aubergine', '#E4D7FF', '#2E1244'), // light, 12.0 : 1
 ];
-
-const MONO: Palette = pal('Black and white', '#000000', '#FFFFFF');
 
 // ---------------------------------------------------------------- OKLab
 const toLin = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -61,35 +64,137 @@ function fromLab([L, a, b]: RGB): RGB {
   ];
 }
 
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
 const mixLab = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 const LAB = PALETTES.map((p) => ({ background: toLab(p.background), sand: toLab(p.sand) }));
-const MONO_LAB = { background: toLab(MONO.background), sand: toLab(MONO.sand) };
+/** +1 when the sand is lighter than the background, -1 when darker */
+const SIDE = LAB.map((p) => Math.sign(p.sand[0] - p.background[0]));
+/** minimum OKLab lightness gap between sand and background during any fade (4.5 : 1 or more) */
+const MIN_GAP = 0.52;
+
+/** quick pairs offered in the colour picker, besides the changing palettes */
+export const FIXED_PAIRS: Palette[] = [
+  pal('Black & white', '#000000', '#FFFFFF'),
+  pal('White & black', '#FFFFFF', '#111111'),
+  ...PALETTES,
+];
+
+// ------------------------------------------------------------- helpers
+export const toHex = (c: ArrayLike<number>, o = 0) =>
+  '#' + [0, 1, 2].map((k) => Math.round(Math.min(1, Math.max(0, c[o + k])) * 255).toString(16).padStart(2, '0')).join('');
+
+export const fromHex = hex;
+
+function luminance([r, g, b]: RGB) {
+  return 0.2126 * toLin(r) + 0.7152 * toLin(g) + 0.0722 * toLin(b);
+}
+
+/** WCAG contrast ratio between two colours */
+export function contrast(a: RGB, b: RGB) {
+  const la = luminance(a), lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/**
+ * Adjust the lightness of `move` (OKLab, in place) until it reaches 4.6 : 1
+ * against `fixed`, keeping it on its current side (lighter or darker) unless
+ * there is no room there.
+ */
+function readable(fixed: RGB, move: RGB) {
+  const TARGET = 4.6;
+  const ref = fromLab(fixed);
+  const ok = (L: number, chroma = 1) => contrast(ref, fromLab([L, move[1] * chroma, move[2] * chroma])) >= TARGET;
+  if (ok(move[0])) return;
+  const prefer = move[0] >= fixed[0] ? 1 : -1;
+  // first keep the colour as vivid as it is; failing that, soften it toward
+  // white or black just enough (very vivid colours can't get light or dark enough)
+  for (const vivid of [true, false]) {
+    for (const side of [prefer, -prefer]) {
+      const end = side > 0 ? 1 : 0;
+      if (vivid) {
+        if (!ok(end)) continue;
+        // the nearest lightness on this side that is readable
+        let bad = side > 0 ? Math.max(move[0], fixed[0]) : Math.min(move[0], fixed[0]);
+        let good = end;
+        for (let k = 0; k < 16; k++) {
+          const mid = (bad + good) / 2;
+          if (ok(mid)) good = mid;
+          else bad = mid;
+        }
+        move[0] = good;
+        return;
+      }
+      if (!ok(end, 0)) continue;
+      // at the far end, keep as much colour as still reads clearly
+      let good = 0, bad = 1;
+      for (let k = 0; k < 12; k++) {
+        const mid = (good + bad) / 2;
+        if (ok(end, mid)) good = mid;
+        else bad = mid;
+      }
+      move[0] = end;
+      move[1] *= good;
+      move[2] *= good;
+      return;
+    }
+  }
+  move[0] = fixed[0] > 0.6 ? 0 : 1;
+  move[1] = move[2] = 0;
+}
 
 // ---------------------------------------------------------------- drift
-/** where on the warm → cool scale a pitch sits: 40 Hz is the warmest, 2 kHz the coolest */
+/** where on the low → high scale a pitch sits */
 const LOW_HZ = 40;
 const HIGH_HZ = 2000;
+
+type Part = 'background' | 'sand';
 
 export class ColorDrift {
   /** fractional position along PALETTES */
   pos = 2;
-  /** 0 = full colour, 1 = black and white */
-  mono = 0;
   /** background rgb, sand rgb (sRGB 0..1), ready for the shader */
   readonly rgb = new Float32Array(6);
   private time = Math.random() * 100;
+  /** colours the person picked (OKLab), or null while that part keeps changing */
+  private fixed: Record<Part, RGB | null> = { background: null, sand: null };
+  private fixedHex: Record<Part, string | null> = { background: null, sand: null };
+  /** last picked colour, kept so releasing it fades back smoothly */
+  private held: Record<Part, RGB> = { background: [0, 0, 0], sand: [1, 0, 0] };
+  /** 0 = changing, 1 = the picked colour; eased so switches fade */
+  private weight: Record<Part, number> = { background: 0, sand: 0 };
 
-  /** jump straight to the colours for this figure (no fade), e.g. on load */
-  snap(meanLambda: number, colour: boolean) {
+  /** a hex colour fixes that part; null lets it follow the sound again */
+  setFixed(background: string | null, sand: string | null) {
+    const parts: [Part, string | null][] = [['background', background], ['sand', sand]];
+    for (const [k, v] of parts) {
+      if (v === this.fixedHex[k]) continue;
+      this.fixedHex[k] = v;
+      this.fixed[k] = v ? toLab(hex(v)) : null;
+      if (this.fixed[k]) this.held[k] = this.fixed[k]!;
+    }
+  }
+
+  /** jump straight to the colours (no fade), e.g. on load */
+  snap(meanLambda: number) {
     this.pos = this.fromFigure(meanLambda);
-    this.mono = colour ? 0 : 1;
+    this.weight.background = this.fixed.background ? 1 : 0;
+    this.weight.sand = this.fixed.sand ? 1 : 0;
     this.compute();
   }
 
   private scale(t: number) {
     const last = PALETTES.length - 1;
-    return Math.min(last, Math.max(0, t * last));
+    const x = Math.min(last, Math.max(0, t * last));
+    // pull toward the nearest palette so a held note settles on one pairing,
+    // not halfway between two; moving the pitch still glides across
+    const i = Math.floor(x), f = x - i;
+    const g = Math.min(1, Math.max(0, (f - 0.3) / 0.4));
+    return i + g * g * (3 - 2 * g);
   }
 
   /** the pitch picks the colour: every change of frequency shows */
@@ -97,7 +202,7 @@ export class ColorDrift {
     return this.scale(Math.log(Math.max(hz, LOW_HZ) / LOW_HZ) / Math.log(HIGH_HZ / LOW_HZ));
   }
 
-  /** no sound: the figure picks it (λ 2 broad and simple → warm, λ 300 fine lace → cool), with a slow sway */
+  /** no sound: the figure picks it (λ 2 broad and simple … λ 300 fine lace), with a slow sway */
   private fromFigure(meanLambda: number) {
     const t = Math.log(Math.max(meanLambda, 2) / 2) / Math.log(150);
     return this.scale(t + 0.05 * Math.sin(this.time * 0.16));
@@ -107,20 +212,22 @@ export class ColorDrift {
    * @param pitchHz the dominant frequency while sound is playing; null when silent
    * @param holding sound source is on but momentarily quiet: keep the current colour
    */
-  update(dt: number, pitchHz: number | null, holding: boolean, meanLambda: number, colour: boolean, reducedMotion: boolean) {
+  update(dt: number, pitchHz: number | null, holding: boolean, meanLambda: number, reducedMotion: boolean) {
     this.time += dt;
     if (pitchHz || !holding) {
       const target = pitchHz ? this.fromPitch(pitchHz) : this.fromFigure(meanLambda);
-      // following a pitch is quick (about a second); the idle drift is slow
-      const rate = (pitchHz ? 1.6 : 0.35) * (reducedMotion ? 0.35 : 1);
+      // following a pitch is quick (about a third of a second); the idle drift is slow
+      const rate = (pitchHz ? 3.2 : 0.5) * (reducedMotion ? 0.35 : 1);
       this.pos += (target - this.pos) * (1 - Math.exp(-dt * rate));
     }
-    this.mono += ((colour ? 0 : 1) - this.mono) * (1 - Math.exp(-dt * 2.5));
+    const k = 1 - Math.exp(-dt * 10);
+    this.weight.background += ((this.fixed.background ? 1 : 0) - this.weight.background) * k;
+    this.weight.sand += ((this.fixed.sand ? 1 : 0) - this.weight.sand) * k;
     this.compute();
   }
 
   get name() {
-    if (this.mono > 0.5) return MONO.name;
+    if (this.fixed.background && this.fixed.sand) return 'Custom';
     return PALETTES[Math.round(this.pos)].name;
   }
 
@@ -128,14 +235,49 @@ export class ColorDrift {
     const i = Math.floor(this.pos);
     const j = Math.min(PALETTES.length - 1, i + 1);
     const f = this.pos - i;
-    const t = f * f * (3 - 2 * f); // ease between neighbours
-    const A = LAB[i], B = LAB[j], m = this.mono;
-    const keys = ['background', 'sand'] as const;
-    keys.forEach((k, n) => {
-      const c = fromLab(mixLab(mixLab(A[k], B[k], t), MONO_LAB[k], m));
-      this.rgb[n * 3] = c[0];
-      this.rgb[n * 3 + 1] = c[1];
-      this.rgb[n * 3 + 2] = c[2];
-    });
+    const t = f * f * (3 - 2 * f); // hue and colourfulness: a smooth glide
+    const flip = SIDE[i] !== SIDE[j];
+    // lightness: when sand and background swap roles, invert quickly mid-fade
+    const tl = flip ? smooth(0.42, 0.58, f) : t;
+    const A = LAB[i], B = LAB[j];
+    const mix = (k: Part): RGB => {
+      const c = mixLab(A[k], B[k], t);
+      c[0] = A[k][0] + (B[k][0] - A[k][0]) * tl;
+      // a picked colour replaces the changing one (with a short fade either way)
+      return mixLab(c, this.held[k], this.weight[k]);
+    };
+    const bg = mix('background');
+    const sand = mix('sand');
+
+    const fixedBg = this.weight.background > 0.99, fixedSand = this.weight.sand > 0.99;
+    if (fixedBg !== fixedSand) {
+      // one part picked: move only the changing one until it reads clearly against it
+      if (fixedBg) readable(bg, sand);
+      else readable(sand, bg);
+    } else if (!fixedBg) {
+      // both changing: when the two get close, push them apart, the sand one way
+      // and the background the other, so the sand always stays readable
+      const side = Math.sign(sand[0] - bg[0]) || (f < 0.5 ? SIDE[i] : SIDE[j]);
+      const need = MIN_GAP - Math.abs(sand[0] - bg[0]);
+      if (need > 0) {
+        const lo = 0.03, hi = 0.985;
+        let s = sand[0] + side * need * 0.5;
+        let b = bg[0] - side * need * 0.5;
+        // if one hits the end of the scale, the other takes up the rest
+        if (s > hi) { b -= s - hi; s = hi; }
+        if (s < lo) { b += lo - s; s = lo; }
+        if (b > hi) { s -= b - hi; b = hi; }
+        if (b < lo) { s += lo - b; b = lo; }
+        sand[0] = s;
+        bg[0] = b;
+      }
+    }
+    // both picked: shown exactly as chosen (the panel shows their contrast)
+    const out = [fromLab(bg), fromLab(sand)];
+    for (let n = 0; n < 2; n++) {
+      this.rgb[n * 3] = out[n][0];
+      this.rgb[n * 3 + 1] = out[n][1];
+      this.rgb[n * 3 + 2] = out[n][2];
+    }
   }
 }

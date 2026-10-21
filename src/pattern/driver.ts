@@ -59,7 +59,7 @@ export class PatternDriver {
       if (this.silentFor > 2.5) this.warm = 0;
       this.silentFor = 0;
     } else this.silentFor += dt;
-    this.warm = Math.min(1, this.warm + dt / (source === 'tone' ? 1.2 : 4));
+    this.warm = Math.min(1, this.warm + dt / (source === 'tone' ? 0.35 : 1.5));
 
     if (p.drive === 'manual') this.driveManual(dt, F, p);
     else if (F.active) this.driveAudio(dt, t, F, p, source, sounding);
@@ -81,10 +81,10 @@ export class PatternDriver {
     const bank = this.bank;
     if (sounding) {
       const mult = complexityMult(p.complexity);
-      const dom = this.follow('dom', F.dominantHz, dt, source === 'tone' ? 30 : 7);
-      const low = this.follow('low', F.lowHz, dt, 6);
-      const mid = this.follow('mid', F.midHz, dt, 6);
-      const high = this.follow('high', F.highHz, dt, 6);
+      const dom = this.follow('dom', F.dominantHz, dt, source === 'tone' ? 40 : 12);
+      const low = this.follow('low', F.lowHz, dt, 10);
+      const mid = this.follow('mid', F.midHz, dt, 10);
+      const high = this.follow('high', F.highHz, dt, 10);
 
       // begin simple, then let the true pitch through
       const lamDom = lamFromHz(dom) * mult;
