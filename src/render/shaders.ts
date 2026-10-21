@@ -84,6 +84,9 @@ void main() {
   gl_FragColor = vec4(f * uNorm, 0.0, 0.0, 1.0);
 }`;
 
+/** the coverage buffer is 8-bit: grains are stored at 1/4 so dense lines don't clip */
+const ACCUM = '#define ACCUM_SCALE 4.0';
+
 const hash = /* glsl */ `
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -154,6 +157,7 @@ void main() {
 }`;
 
 export const displayFrag = /* glsl */ `
+${ACCUM}
 precision highp float;
 uniform sampler2D uField;
 uniform sampler2D uAccum;   // how much sand landed on each pixel
@@ -186,10 +190,10 @@ void main() {
   bg = mix(bg, mix(uBgIn, vec3(1.0), 0.25), haze);
   bg = mix(bg, uSand, line);
 
-  float a = texture2D(uAccum, gl_FragCoord.xy / uRes).r;
+  float a = texture2D(uAccum, gl_FragCoord.xy / uRes).r * ACCUM_SCALE;
   float cover = 1.0 - exp(-2.2 * a);
   gl_FragColor = vec4(mix(bg, uSand, cover), 1.0);
-}`;
+}`
 
 export const pointsVert = /* glsl */ `
 precision highp float;
@@ -227,8 +231,9 @@ void main() {
 }`;
 
 export const pointsFrag = /* glsl */ `
+${ACCUM}
 precision highp float;
 varying float vB;
 void main() {
-  gl_FragColor = vec4(vec3(vB), 1.0);
-}`;
+  gl_FragColor = vec4(vec3(vB / ACCUM_SCALE), 1.0);
+}`

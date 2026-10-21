@@ -81,7 +81,7 @@ export class CpuRenderer implements PlateRenderer {
     for (let k = keep; k < n; k++) {
       px[k] = (rnd() * 2 - 1) * this.bx;
       py[k] = (rnd() * 2 - 1) * this.by;
-      const dust = rnd() < 0.14;
+      const dust = rnd() < 0.06;
       pm[k] = dust ? 0.12 + rnd() * 0.3 : 0.7 + rnd() * 0.3;
       pb[k] = dust ? 50 + rnd() * 80 : 90 + rnd() * rnd() * 165;
     }
@@ -98,6 +98,10 @@ export class CpuRenderer implements PlateRenderer {
 
   setTitle(mask: TitleMask | null) {
     this.title = mask;
+  }
+
+  qualityUp() {
+    return false;
   }
 
   qualityDown() {

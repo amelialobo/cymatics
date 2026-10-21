@@ -93,7 +93,7 @@ export function AdjustPanel() {
               display={`${Math.round(count / 1000)}k grains`}
               value={Math.round(p.density * 100)}
               min={40}
-              max={170}
+              max={200}
               step={5}
               onChange={(v) => setParams({ density: v / 100 })}
             />

@@ -44,6 +44,9 @@ export class Experience {
   private meterLevel = 0;
   private hudT = 0;
   private frameAvg = 16.7;
+  /** time our own frame takes (sim + draw submit), separate from browser pauses */
+  private workAvg = 2;
+  private fastStreak = 0;
   private perfT = 0;
   private slowStreak = 0;
   private startT = performance.now() / 1000;
@@ -160,7 +163,13 @@ export class Experience {
   }
 
   private resize() {
-    this.renderer?.resize(this.container.clientWidth, this.container.clientHeight);
+    const w = this.container.clientWidth, h = this.container.clientHeight;
+    this.renderer?.resize(w, h);
+    // more screen, more sand: the reserve makes this seamless (no re-sprinkling)
+    if (this.renderer && w > 0 && h > 0) {
+      const n = this.renderer.setParticleBudget(desiredParticles(w, h, ui.get().params.density, this.coarse));
+      if (n !== ui.get().particleCount) ui.set({ particleCount: n });
+    }
     if (this.intro.mask && this.intro.phase === 'title') this.buildTitle();
   }
 
@@ -246,25 +255,40 @@ export class Experience {
     inp.response = p.response;
     inp.paused = p.paused;
     this.stepIntro(dt);
+    const w0 = performance.now();
     this.renderer?.frame(inp);
+    const work = performance.now() - w0;
 
-    this.trackPerformance(rawMs, t);
+    this.trackPerformance(rawMs, work, t);
     this.updateMeters(F.active ? F.level : 0, dt);
     this.updateReadout(t);
   };
 
   /** adaptive quality: shed grains, then resolution, if frames run long */
-  private trackPerformance(ms: number, t: number) {
+  private trackPerformance(ms: number, work: number, t: number) {
     if (ms > 0 && ms < 100) this.frameAvg = this.frameAvg * 0.95 + ms * 0.05;
+    this.workAvg = this.workAvg * 0.95 + work * 0.05;
     if (t < this.perfT || t - this.startT < 3 || document.hidden) return;
     this.perfT = t + 2;
-    if (this.frameAvg > 24) this.slowStreak++;
-    else this.slowStreak = 0;
-    if (this.slowStreak >= 2 && this.renderer?.qualityDown()) {
+    const r = this.renderer;
+    if (!r) return;
+    // shed grains only when frames are slow *and* our own work is heavy; a
+    // throttled window, a dialog or a 30 fps battery cap are not reasons to
+    // take sand away
+    const slow = this.frameAvg > 24 && this.workAvg > 8;
+    const fast = this.frameAvg < 19 && this.workAvg < 5;
+    this.slowStreak = slow ? this.slowStreak + 1 : 0;
+    this.fastStreak = fast ? this.fastStreak + 1 : 0;
+    if (this.slowStreak >= 2 && r.qualityDown()) {
       this.slowStreak = 0;
-      ui.set({ particleCount: this.renderer.particleCount });
+      ui.set({ particleCount: r.particleCount });
+    } else if (this.fastStreak >= 3 && r.qualityUp()) {
+      // and give sand back once there is headroom again
+      this.fastStreak = 0;
+      ui.set({ particleCount: r.particleCount });
     }
   }
+
 
   private sweep(dt: number) {
     const tone = this.audio.state.tone;

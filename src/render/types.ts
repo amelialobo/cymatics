@@ -38,6 +38,8 @@ export interface PlateRenderer {
   setTitle(mask: TitleMask | null): void;
   /** lower quality one notch; false when already at the floor */
   qualityDown(): boolean;
+  /** restore quality one notch; false when already at full quality */
+  qualityUp(): boolean;
   exportPNG(): Promise<Blob>;
   dispose(): void;
 }
@@ -72,6 +74,6 @@ export function clientToPlate(cx: number, cy: number, w: number, h: number) {
 }
 
 export function desiredParticles(cssW: number, cssH: number, density: number, coarse: boolean) {
-  const base = cssW * cssH * (coarse ? 0.16 : 0.35);
-  return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 180000 : 520000));
+  const base = cssW * cssH * (coarse ? 0.3 : 0.6);
+  return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 409600 : 1048576));
 }

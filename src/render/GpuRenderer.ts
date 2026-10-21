@@ -9,6 +9,9 @@ import { TUNE, plateLayout, type FrameInput, type PlateRenderer } from './types'
 import type { TitleMask } from './title';
 
 const FIELD_RES = 512;
+/** sand is reserved once at this size (grains = size²); quality only changes how much of it is active */
+const CAPACITY = matchMedia('(pointer: coarse)').matches ? 640 : 1024;
+const MIN_ACTIVE = 16000;
 
 export function gpuSupported(): boolean {
   try {
@@ -45,6 +48,11 @@ export class GpuRenderer implements PlateRenderer {
   private densityTex: THREE.DataTexture;
   private ping = 0;
   private texSize = 0;
+  /** grains asked for (from screen size and the Amount slider) */
+  private budget = 0;
+  /** 0.25..1: share of the budget kept active by the performance governor */
+  private quality = 1;
+  private activeRows = 0;
   private frameNo = 0;
 
   /** how much sand lands on each screen pixel; the colour pass reads it */
@@ -84,8 +92,9 @@ export class GpuRenderer implements PlateRenderer {
       wrapT: THREE.ClampToEdgeWrapping,
     });
 
+    // 8-bit: adding many grains into the same pixel is much cheaper than in float
     this.accumRT = new THREE.WebGLRenderTarget(1, 1, {
-      type: THREE.HalfFloatType,
+      type: THREE.UnsignedByteType,
       format: THREE.RGBAFormat,
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
@@ -161,7 +170,7 @@ export class GpuRenderer implements PlateRenderer {
   }
 
   get particleCount() {
-    return this.texSize * this.texSize;
+    return this.activeRows * this.texSize;
   }
 
   private pixelRatio() {
@@ -196,10 +205,24 @@ export class GpuRenderer implements PlateRenderer {
   }
 
   setParticleBudget(n: number) {
-    // texture sides in steps of 16 keep the count tidy
-    const size = Math.max(96, Math.min(720, Math.round(Math.sqrt(n) / 16) * 16));
-    if (size !== this.texSize) this.allocParticles(size);
+    this.budget = n;
+    if (!this.texSize) this.allocParticles(CAPACITY);
+    this.applyActive();
     return this.particleCount;
+  }
+
+  /** activate a share of the reserved sand: no re-sprinkling, so changes are seamless */
+  private applyActive() {
+    const size = this.texSize;
+    const want = Math.min(size * size, Math.max(MIN_ACTIVE, Math.round(this.budget * this.quality)));
+    const rows = Math.max(1, Math.min(size, Math.ceil(want / size)));
+    if (rows === this.activeRows) return;
+    this.activeRows = rows;
+    for (const rt of this.posRT) {
+      rt.scissor.set(0, 0, size, rows);
+      rt.scissorTest = true;
+    }
+    this.points?.geometry.setDrawRange(0, rows * size);
   }
 
   private allocParticles(size: number) {
@@ -215,8 +238,6 @@ export class GpuRenderer implements PlateRenderer {
           depthBuffer: false,
         })
     );
-    this.seed();
-
     if (this.points) {
       this.pointsScene.remove(this.points);
       this.points.geometry.dispose();
@@ -242,6 +263,8 @@ export class GpuRenderer implements PlateRenderer {
     this.points = new THREE.Points(geo, mat);
     this.points.frustumCulled = false;
     this.pointsScene.add(this.points);
+    this.activeRows = 0;
+    this.seed();
   }
 
   /** sprinkle fresh sand evenly over the visible plate */
@@ -250,7 +273,7 @@ export class GpuRenderer implements PlateRenderer {
     const data = new Float32Array(size * size * 4);
     const { x: bx, y: by } = this.bounds;
     for (let i = 0; i < size * size; i++) {
-      const dust = Math.random() < 0.14;
+      const dust = Math.random() < 0.06;
       data[i * 4] = (Math.random() * 2 - 1) * bx;
       data[i * 4 + 1] = (Math.random() * 2 - 1) * by;
       data[i * 4 + 2] = dust ? 0.12 + Math.random() * 0.3 : 0.7 + Math.random() * 0.3; // mobility
@@ -260,7 +283,21 @@ export class GpuRenderer implements PlateRenderer {
     this.seedTex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.FloatType);
     this.seedTex.minFilter = this.seedTex.magFilter = THREE.NearestFilter;
     this.seedTex.needsUpdate = true;
-    this.posTex = this.seedTex;
+    // copy the fresh sand into both buffers in full (not just the active rows),
+    // so grains that become active later start somewhere sensible
+    const u = this.simU;
+    u.uPos.value = this.seedTex;
+    u.uV.value = u.uKick.value = u.uPull.value = 0;
+    u.uImpN.value = 0;
+    for (const rt of this.posRT) {
+      const test = rt.scissorTest;
+      rt.scissorTest = false;
+      this.gl.setRenderTarget(rt);
+      this.gl.render(this.simScene, this.camera);
+      rt.scissorTest = test;
+    }
+    this.posTex = this.posRT[0].texture;
+    this.ping = 1;
   }
 
   scatter() {
@@ -285,13 +322,29 @@ export class GpuRenderer implements PlateRenderer {
   }
 
   qualityDown() {
-    if (this.texSize > 224) {
-      this.setParticleBudget(this.particleCount * 0.72);
+    if (this.quality > 0.3) {
+      this.quality = Math.max(0.25, this.quality * 0.8);
+      this.applyActive();
       return true;
     }
     if (this.prScale > 0.6) {
       this.prScale = Math.max(0.6, this.prScale * 0.8);
       this.resize(this.cssW, this.cssH);
+      return true;
+    }
+    return false;
+  }
+
+  /** give back what qualityDown took, resolution first */
+  qualityUp() {
+    if (this.prScale < 1) {
+      this.prScale = Math.min(1, this.prScale * 1.15);
+      this.resize(this.cssW, this.cssH);
+      return true;
+    }
+    if (this.quality < 1) {
+      this.quality = Math.min(1, this.quality * 1.15);
+      this.applyActive();
       return true;
     }
     return false;
