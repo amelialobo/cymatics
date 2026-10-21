@@ -3,7 +3,7 @@ import { Experience } from './core/Experience';
 import { setParams, toast, ui, useUI } from './core/store';
 import { AdjustPanel } from './ui/AdjustPanel';
 import { ColourPanel } from './ui/ColourPanel';
-import { Dock, TopBar } from './ui/Bars';
+import { Dock, InfoButton } from './ui/Bars';
 import { ExperienceContext, toggleFullscreen } from './ui/context';
 import { Bolt, Details, DropOverlay, FileInput, Help, Intro, Loader, NoRenderer, Toast, Welcome } from './ui/Overlays';
 import { cx } from './ui/primitives';
@@ -119,7 +119,7 @@ export default function App() {
       {renderer !== 'none' && <Bolt />}
       {renderer === 'none' && <NoRenderer />}
       <div inert={titled} className={cx('transition-opacity duration-700', titled ? 'opacity-0' : 'opacity-100')}>
-        <TopBar />
+        <InfoButton />
         <Details />
         <Dock />
       </div>

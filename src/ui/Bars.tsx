@@ -1,4 +1,4 @@
-/** Top navigation and bottom dock: solid black bars framing the plate. */
+/** Floating info button and bottom dock: the only chrome over the plate. */
 import { useEffect, useRef } from 'react';
 import { TONE_MAX, TONE_MIN, type SourceKind } from '../audio/AudioEngine';
 import { toast, ui, useUI } from '../core/store';
@@ -7,29 +7,30 @@ import { Icon, type IconName } from './icons';
 import { ColourWheelButton } from './ColourPanel';
 import { Button, IconButton, cx } from './primitives';
 
-// ------------------------------------------------------------------ top
-export function TopBar() {
-  const exp = useExperience();
+// ----------------------------------------------------------------- info
+export function InfoButton() {
   const helpOpen = useUI((s) => s.helpOpen);
   return (
-    <header
-      className="fixed inset-x-0 top-0 z-20 flex h-14 items-center justify-between border-b border-line/70 bg-ink pl-5 pr-2 sm:pr-3"
-      style={{ paddingTop: 'env(safe-area-inset-top)', boxSizing: 'content-box' }}
-    >
-      <div className="flex items-center gap-2.5">
-        <span className="grid h-6 w-6 place-items-center rounded-full ring-1 ring-white/70" aria-hidden>
-          <span className="h-2 w-2 rounded-full bg-white" />
-        </span>
-        <h1 className="text-[15px] font-semibold tracking-[0.18em] uppercase">Cymatics</h1>
-        <span className="ml-2 hidden text-[13px] text-muted md:inline">See what sound looks like</span>
-      </div>
-      <nav aria-label="Tools" className="flex items-center gap-1">
-        <IconButton icon="help" label="How it works" aria-expanded={helpOpen} onClick={() => ui.set({ helpOpen: !helpOpen, panelOpen: false, coloursOpen: false })} />
-        <ColourWheelButton />
-        <IconButton icon="camera" label="Save image" onClick={() => void exp?.savePNG()} />
-        {document.fullscreenEnabled && <IconButton icon="expand" label="Full screen" onClick={toggleFullscreen} />}
-      </nav>
-    </header>
+    <IconButton
+      icon="info"
+      label="How it works"
+      aria-expanded={helpOpen}
+      onClick={() => ui.set({ helpOpen: !helpOpen, panelOpen: false, coloursOpen: false })}
+      className="fixed right-3 z-20 bg-black/30 text-white/80 ring-1 ring-white/15 backdrop-blur-md hover:bg-black/50 aria-expanded:bg-black/50 md:right-4"
+      style={{ top: 'calc(env(safe-area-inset-top) + 12px)' }}
+    />
+  );
+}
+
+/** colours, snapshot and full screen */
+function Tools() {
+  const exp = useExperience();
+  return (
+    <>
+      <ColourWheelButton />
+      <IconButton icon="camera" label="Save image" onClick={() => void exp?.savePNG()} />
+      {document.fullscreenEnabled && <IconButton icon="expand" label="Full screen" onClick={toggleFullscreen} />}
+    </>
   );
 }
 
@@ -70,6 +71,7 @@ export function Dock() {
                   key={s.id}
                   role="tab"
                   aria-selected={active}
+                  aria-label={s.label}
                   onClick={() => ui.set({ tab: s.id })}
                   className={cx(
                     'relative flex min-h-10 flex-1 cursor-pointer items-center justify-center gap-2 rounded-full px-3.5 text-[14px] font-medium transition-colors duration-200 md:flex-none',
@@ -78,13 +80,16 @@ export function Dock() {
                 >
                   <Icon name={s.icon} size={18} />
                   <span className="hidden sm:inline">{s.label}</span>
-                  <span className="sm:hidden">{s.short}</span>
+                  <span className="max-[419px]:hidden sm:hidden">{s.short}</span>
                   {source === s.id && (
                     <span className={cx('absolute right-2 top-1.5 h-1.5 w-1.5 rounded-full', active ? 'bg-black' : 'bg-white')} aria-label="active" />
                   )}
                 </button>
               );
             })}
+          </div>
+          <div className="flex items-center md:hidden">
+            <Tools />
           </div>
           <IconButton
             icon="sliders"
@@ -102,7 +107,8 @@ export function Dock() {
           {tab === 'live' && <MicDock />}
         </div>
 
-        <div className="hidden md:block">
+        <div className="hidden items-center gap-1 md:flex">
+          <Tools />
           <Button
             icon="sliders"
             aria-expanded={panelOpen}

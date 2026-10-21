@@ -49,8 +49,8 @@ export function ColourPanel() {
         className={cx(
           'fixed z-30 flex flex-col overflow-hidden bg-surface ring-1 ring-line transition-[transform,opacity] duration-300 ease-out-quint',
           'inset-x-0 bottom-0 max-h-[70dvh] rounded-t-3xl',
-          'md:inset-x-auto md:bottom-auto md:right-4 md:top-[calc(56px+env(safe-area-inset-top)+12px)] md:max-h-[calc(100dvh-var(--dock-h,80px)-100px)] md:w-[340px] md:rounded-2xl',
-          open ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-full opacity-0 md:-translate-y-4'
+          'md:inset-x-auto md:right-4 md:bottom-[calc(var(--dock-h,80px)+12px)] md:max-h-[calc(100dvh-var(--dock-h,80px)-88px)] md:w-[340px] md:rounded-2xl',
+          open ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-full opacity-0 md:translate-y-4'
         )}
       >
         <div className="relative flex min-h-14 shrink-0 items-center justify-between border-b border-line pl-5 pr-2">
