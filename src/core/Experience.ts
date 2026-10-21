@@ -158,7 +158,8 @@ export class Experience {
     this.bank.pack();
     this.bank.normalise(p.symmetry);
     // the colours follow the figure the sand is drawing
-    this.color.update(dt, this.bank.meanLambda(), p.colour, this.reduced);
+    const sounding = F.active && F.level > 0.02 && F.dominantHz > 20;
+    this.color.update(dt, sounding ? F.dominantHz : null, F.active, this.bank.meanLambda(), p.colour, this.reduced);
 
     this.impulses.length = 0;
     this.pointers.forEach((im) => this.impulses.push(im));

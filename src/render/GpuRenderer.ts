@@ -59,6 +59,7 @@ export class GpuRenderer implements PlateRenderer {
   private brightBase = 1;
   private lift = 1;
   private bounds = new THREE.Vector2(1, 1);
+  private bufSize = new THREE.Vector2();
   private readonly modesArr = new Float32Array(MAX_ACTIVE * 4);
   private readonly impArr = new Float32Array(16);
 
@@ -126,7 +127,7 @@ export class GpuRenderer implements PlateRenderer {
       uRes: { value: new THREE.Vector2() },
       uSide: { value: 1 },
       uLine: { value: 0.06 },
-      uHaze: { value: 0.28 },
+      uHaze: { value: 0.16 },
       uBgIn: { value: new THREE.Vector3() },
       uBgOut: { value: new THREE.Vector3() },
       uSand: { value: new THREE.Vector3(1, 1, 1) },
@@ -167,7 +168,9 @@ export class GpuRenderer implements PlateRenderer {
   private syncSizeUniforms(exportScale: number) {
     const pr = this.pixelRatio() * exportScale;
     const { side } = plateLayout(this.cssW, this.cssH);
-    const bw = Math.round(this.cssW * pr), bh = Math.round(this.cssH * pr);
+    // match the real drawing buffer exactly, so each grain maps to one pixel
+    this.gl.getDrawingBufferSize(this.bufSize);
+    const bw = this.bufSize.x, bh = this.bufSize.y;
     (this.displayU.uRes.value as THREE.Vector2).set(bw, bh);
     if (this.accumRT.width !== bw || this.accumRT.height !== bh) this.accumRT.setSize(bw, bh);
     this.displayU.uSide.value = side * pr;
@@ -303,7 +306,7 @@ export class GpuRenderer implements PlateRenderer {
     this.lift = Math.min(1.55, Math.max(1, 0.9 + inp.bank.meanLambda() / 110));
     this.pointsU.uBright.value = this.brightBase * this.lift;
     // the nodal field shows through more while the sand is in motion
-    this.displayU.uLine.value = 0.025 + 0.06 * Math.min(1, inp.V + inp.kick);
+    this.displayU.uLine.value = 0.015 + 0.035 * Math.min(1, inp.V + inp.kick);
     const c = inp.colors;
     (this.displayU.uBgIn.value as THREE.Vector3).set(c[0], c[1], c[2]);
     (this.displayU.uBgOut.value as THREE.Vector3).set(c[3], c[4], c[5]);
@@ -327,7 +330,13 @@ export class GpuRenderer implements PlateRenderer {
   frame(inp: FrameInput) {
     this.renderField(inp);
     const moving = inp.V > 0.0005 || inp.kick > 0.0005 || inp.impulses.length > 0;
-    if (!inp.paused && moving) this.simulate(inp);
+    if (!inp.paused && moving) {
+      // a long frame becomes several normal 60 Hz steps, so the sand settles
+      // the same on a slow or busy machine instead of smearing
+      const steps = Math.min(4, Math.max(1, Math.round(inp.dt * 60)));
+      const step = steps > 1 ? { ...inp, dt: inp.dt / steps } : inp;
+      for (let i = 0; i < steps; i++) this.simulate(step);
+    }
     this.draw(inp);
   }
 

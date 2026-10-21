@@ -1,8 +1,12 @@
 /**
- * Colour that follows the sand. Palettes sit in hue order around the wheel;
- * the plate's current figure picks a position along them (simple, low figures
- * are warm, intricate high ones cool), and the colours glide there slowly.
- * Blending happens in OKLab so fades stay vivid instead of turning muddy.
+ * Colour that follows the sound. Palettes sit in hue order from warm to cool;
+ * the pitch you hear picks a position along them (low notes warm, high notes
+ * cool), and the colours glide there. With no sound, the plate's figure picks
+ * instead. Blending happens in OKLab so fades stay vivid instead of muddy.
+ *
+ * Every palette pairs a vivid background, deep enough for contrast, with light
+ * sand: sand reaches at least 4.5:1 against the brightest part of the
+ * background. Keeping all sand light means a fade never dips into low contrast.
  */
 
 type RGB = [number, number, number];
@@ -19,16 +23,16 @@ export interface Palette {
 const hex = (h: string): RGB => [parseInt(h.slice(1, 3), 16) / 255, parseInt(h.slice(3, 5), 16) / 255, parseInt(h.slice(5, 7), 16) / 255];
 const pal = (name: string, inner: string, outer: string, sand: string): Palette => ({ name, inner: hex(inner), outer: hex(outer), sand: hex(sand) });
 
-/** in hue order, so neighbours always blend well */
+/** warm → cool, so neighbours always blend well. Contrast (sand : centre, sand : edge) noted. */
 export const PALETTES: Palette[] = [
-  pal('Citrus', '#FFD23F', '#FF8A1F', '#2A1478'),
-  pal('Sunset', '#FF9A3C', '#E2365B', '#FFF4D2'),
-  pal('Flamingo', '#FF7AA2', '#C2187A', '#FFF0B8'),
-  pal('Magenta', '#FF3D9A', '#7B2CBF', '#FFE14D'),
-  pal('Ultraviolet', '#8A4DFF', '#3B1BB8', '#5CFFD0'),
-  pal('Sky', '#5CD3FF', '#3A63E8', '#FFFFFF'),
-  pal('Lagoon', '#19C3B0', '#0B5FD6', '#FFE873'),
-  pal('Lime', '#B5F23D', '#1FAF6A', '#1E1670'),
+  pal('Amber', '#C2410C', '#6B2205', '#FFF2D2'), // 4.7 : 10.2
+  pal('Ember', '#C92E17', '#7E0D22', '#FFF3C4'), // 4.6 : 9.6
+  pal('Rose', '#D11F62', '#740A45', '#FFF7B8'), // 4.7 : 10.3
+  pal('Orchid', '#B81FD0', '#4E0C86', '#FFF6A6'), // 4.6 : 11.0
+  pal('Violet', '#6D35E8', '#25105E', '#C9FFEC'), // 5.7 : 14.5
+  pal('Cobalt', '#1F5FE0', '#0A1C72', '#FFF3A3'), // 4.9 : 13.1
+  pal('Lagoon', '#08807B', '#043A52', '#FFFBCF'), // 4.6 : 11.5
+  pal('Forest', '#1F7D37', '#093F23', '#F2FFB0'), // 4.9 : 11.3
 ];
 
 const MONO: Palette = pal('Black and white', '#000000', '#000000', '#FFFFFF');
@@ -67,6 +71,10 @@ const LAB = PALETTES.map((p) => ({ inner: toLab(p.inner), outer: toLab(p.outer),
 const MONO_LAB = { inner: toLab(MONO.inner), outer: toLab(MONO.outer), sand: toLab(MONO.sand) };
 
 // ---------------------------------------------------------------- drift
+/** where on the warm → cool scale a pitch sits: 40 Hz is the warmest, 2 kHz the coolest */
+const LOW_HZ = 40;
+const HIGH_HZ = 2000;
+
 export class ColorDrift {
   /** fractional position along PALETTES */
   pos = 2;
@@ -78,26 +86,39 @@ export class ColorDrift {
 
   /** jump straight to the colours for this figure (no fade), e.g. on load */
   snap(meanLambda: number, colour: boolean) {
-    this.pos = this.targetFor(meanLambda);
+    this.pos = this.fromFigure(meanLambda);
     this.mono = colour ? 0 : 1;
     this.compute();
   }
 
-  private targetFor(meanLambda: number) {
+  private scale(t: number) {
     const last = PALETTES.length - 1;
-    // the figure picks the colour: λ 2 (broad, simple) → warm … λ 300 (fine lace) → cool
-    const t = Math.min(1, Math.max(0, Math.log(Math.max(meanLambda, 2) / 2) / Math.log(150)));
-    // a slow sway keeps a held figure gently alive
-    const sway = 0.35 * Math.sin(this.time * 0.16);
-    return Math.min(last, Math.max(0, t * last + sway));
+    return Math.min(last, Math.max(0, t * last));
   }
 
-  update(dt: number, meanLambda: number, colour: boolean, reducedMotion: boolean) {
+  /** the pitch picks the colour: every change of frequency shows */
+  private fromPitch(hz: number) {
+    return this.scale(Math.log(Math.max(hz, LOW_HZ) / LOW_HZ) / Math.log(HIGH_HZ / LOW_HZ));
+  }
+
+  /** no sound: the figure picks it (λ 2 broad and simple → warm, λ 300 fine lace → cool), with a slow sway */
+  private fromFigure(meanLambda: number) {
+    const t = Math.log(Math.max(meanLambda, 2) / 2) / Math.log(150);
+    return this.scale(t + 0.05 * Math.sin(this.time * 0.16));
+  }
+
+  /**
+   * @param pitchHz the dominant frequency while sound is playing; null when silent
+   * @param holding sound source is on but momentarily quiet: keep the current colour
+   */
+  update(dt: number, pitchHz: number | null, holding: boolean, meanLambda: number, colour: boolean, reducedMotion: boolean) {
     this.time += dt;
-    const target = this.targetFor(meanLambda);
-    // a few seconds to fade from one palette into the next
-    const rate = reducedMotion ? 0.12 : 0.35;
-    this.pos += (target - this.pos) * (1 - Math.exp(-dt * rate));
+    if (pitchHz || !holding) {
+      const target = pitchHz ? this.fromPitch(pitchHz) : this.fromFigure(meanLambda);
+      // following a pitch is quick (about a second); the idle drift is slow
+      const rate = (pitchHz ? 1.6 : 0.35) * (reducedMotion ? 0.35 : 1);
+      this.pos += (target - this.pos) * (1 - Math.exp(-dt * rate));
+    }
     this.mono += ((colour ? 0 : 1) - this.mono) * (1 - Math.exp(-dt * 2.5));
     this.compute();
   }
