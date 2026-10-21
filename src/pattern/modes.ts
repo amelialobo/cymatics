@@ -112,7 +112,13 @@ export class ModeBank {
       })
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3);
-    for (const [i, r] of scored) this.target[i] += strength * r * r * r;
+    // between resonances the plate still rings in its nearest modes: weigh them
+    // relative to the best, so the figure follows every pitch instead of fading
+    // to the bolt's rings (closeness to resonance shows as vibration instead)
+    for (const [i, r] of scored) {
+      const q = r / best;
+      this.target[i] += strength * q * q * q;
+    }
     return best;
   }
 
