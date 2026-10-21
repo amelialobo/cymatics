@@ -1,4 +1,5 @@
 import type { ModeBank, Symmetry } from '../pattern/modes';
+import type { TitleMask } from './title';
 
 export interface Impulse { x: number; y: number; r: number; s: number }
 
@@ -17,6 +18,10 @@ export interface FrameInput {
   paused: boolean;
   /** background and sand colours: 6 sRGB floats */
   colors: Float32Array;
+  /** 0..1: how much the opening title replaces the plate's own field */
+  titleMix: number;
+  /** 0..1: how strongly the title's letters shake the sand out */
+  titleGain: number;
 }
 
 export interface PlateRenderer {
@@ -29,6 +34,8 @@ export interface PlateRenderer {
   frame(input: FrameInput): void;
   presettle(input: FrameInput, steps: number): void;
   scatter(): void;
+  /** the word the sand spells before the plate starts singing; null clears it */
+  setTitle(mask: TitleMask | null): void;
   /** lower quality one notch; false when already at the floor */
   qualityDown(): boolean;
   exportPNG(): Promise<Blob>;

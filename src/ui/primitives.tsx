@@ -1,9 +1,9 @@
-import { useId, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type ReactNode } from 'react';
+import { useId, type ComponentProps, type CSSProperties, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons';
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ');
 
-type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+type BtnProps = ComponentProps<'button'> & {
   variant?: 'primary' | 'secondary' | 'quiet';
   icon?: IconName;
   size?: 'md' | 'lg';

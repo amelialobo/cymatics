@@ -30,8 +30,14 @@ export const DEFAULT_PARAMS: VisualParams = {
   sandColor: null,
 };
 
+/** the opening title: shaken out of the sand, held a moment, then released */
+export type IntroPhase = 'forming' | 'title' | 'leaving' | 'done';
+
 export interface UIState {
   tab: SourceKind;
+  intro: IntroPhase;
+  /** how far below the screen centre the title's letters reach, css px */
+  titleBottom: number;
   /** the Adjust panel */
   panelOpen: boolean;
   helpOpen: boolean;
@@ -84,6 +90,8 @@ function createStore<T extends object>(initial: T) {
 
 export const ui = createStore<UIState>({
   tab: 'tone',
+  intro: 'forming',
+  titleBottom: 80,
   panelOpen: false,
   helpOpen: false,
   welcome: !readFlag('cymatics:welcomed'),

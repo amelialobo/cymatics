@@ -9,7 +9,8 @@ import { ColorDrift } from '../pattern/palette';
 import { PatternDriver } from '../pattern/driver';
 import { CpuRenderer } from '../render/CpuRenderer';
 import { GpuRenderer, gpuSupported } from '../render/GpuRenderer';
-import { clientToPlate, desiredParticles, type FrameInput, type Impulse, type PlateRenderer } from '../render/types';
+import { clientToPlate, desiredParticles, plateLayout, type FrameInput, type Impulse, type PlateRenderer } from '../render/types';
+import { buildTitleMask, loadTitleFont, type TitleMask } from '../render/title';
 import { saveFrame } from '../export/snapshot';
 import { DEFAULT_PARAMS, toast, ui } from './store';
 
@@ -49,6 +50,10 @@ export class Experience {
   private sweepDir = 1;
   private readonly reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private readonly coarse = matchMedia('(pointer: coarse)').matches;
+  /** opening title: 'title' while the sand spells it, 'release' while it lets go */
+  private intro = { phase: 'title' as 'title' | 'release' | 'off', t: -0.6, mix: 1, mask: null as TitleMask | null };
+  /** white sand on black while the title shows, easing into the plate's own colours */
+  private readonly introRgb = new Float32Array([0, 0, 0, 1, 1, 1]);
   private ro: ResizeObserver;
   private unsub: () => void;
   private input: FrameInput;
@@ -60,7 +65,7 @@ export class Experience {
     this.input = {
       dt: 1 / 60, bank: this.bank, symmetry: p.symmetry, V: 0, kick: 0,
       stability: 0, response: p.response, impulses: this.impulses, paused: false,
-      colors: this.color.rgb,
+      colors: this.introRgb, titleMix: 1, titleGain: 0,
     };
 
     this.ro = new ResizeObserver(() => this.resize());
@@ -91,7 +96,7 @@ export class Experience {
       prev = next;
     });
 
-    this.boot();
+    void this.boot();
   }
 
   private createRenderer(): PlateRenderer | null {
@@ -115,11 +120,12 @@ export class Experience {
     }
   }
 
-  /** let the first figure form behind the loading screen */
-  private boot() {
+  /** prepare the plate behind the loading screen; the sand starts as an even layer for the title */
+  private async boot() {
     const r = this.renderer;
     if (!r) {
-      ui.set({ loading: false });
+      this.intro.phase = 'off';
+      ui.set({ loading: false, intro: 'done' });
       return;
     }
     const p = ui.get().params;
@@ -129,15 +135,81 @@ export class Experience {
     for (let i = 0; i < 8; i++) this.bank.normalise(p.symmetry);
     this.color.setFixed(p.bgColor, p.sandColor);
     this.color.snap(this.bank.meanLambda());
-    r.presettle({ ...this.input, V: 0.6, kick: 0, dt: 1 / 60, stability: 0.6 }, 150);
+
+    await loadTitleFont();
+    if (!this.renderer) return; // disposed while the font loaded
+    this.buildTitle();
+    if (this.reduced) {
+      // no shaking: the word is simply there
+      this.intro.t = 2.4;
+      r.presettle({ ...this.input, V: 0.32, kick: 0, dt: 1 / 60, stability: 0.6, titleMix: 1, titleGain: 1 }, 90);
+    }
     this.driver.V = 0.4;
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
     window.setTimeout(() => ui.set({ loading: false }), 350);
   }
 
+  private buildTitle() {
+    const { clientWidth: w, clientHeight: h } = this.container;
+    const { side, bx, by } = plateLayout(w, h);
+    const mask = buildTitleMask('Cymatics', bx, by);
+    this.intro.mask = mask;
+    this.renderer?.setTitle(mask);
+    ui.set({ titleBottom: Math.round((-mask.bottom * side) / 2) });
+  }
+
   private resize() {
     this.renderer?.resize(this.container.clientWidth, this.container.clientHeight);
+    if (this.intro.mask && this.intro.phase === 'title') this.buildTitle();
+  }
+
+  /**
+   * The plate is struck: the whole layer of sand jumps, and as the ringing
+   * dies down the grains shake out of every letter at once. It holds for a
+   * moment, then releases by itself.
+   */
+  private stepIntro(dt: number) {
+    const it = this.intro, inp = this.input;
+    if (it.phase === 'off') return;
+    it.t += dt;
+    if (it.phase === 'title') {
+      const k = Math.min(1, Math.max(0, it.t / 2.4));
+      const ring = (1 - k) * (1 - k);
+      inp.titleGain = k * k * (3 - 2 * k);
+      // settles to a low hum, so the sand banks up crisply along the letters
+      inp.V = 0.2 + 0.8 * ring;
+      inp.kick = 0.35 * ring;
+      inp.stability = 0.6;
+      if (k >= 1 && ui.get().intro === 'forming') ui.set({ intro: 'title' });
+      // hold the word a moment, then let the plate take over on its own
+      if (it.t > 3.8) this.begin();
+    } else {
+      it.mix = Math.max(0, it.mix - dt / 1.3);
+      if (it.mix === 0) {
+        it.phase = 'off';
+        it.mask = null;
+        this.renderer?.setTitle(null);
+        inp.colors = this.color.rgb;
+      }
+    }
+    inp.titleMix = it.mix;
+    if (it.phase !== 'off') {
+      const pal = this.color.rgb, w = it.mix, rgb = this.introRgb;
+      for (let i = 0; i < 6; i++) rgb[i] = pal[i] + ((i < 3 ? 0 : 1) - pal[i]) * w;
+    }
+  }
+
+  /** the plate takes over from the title and the sand runs to its lines */
+  begin() {
+    const it = this.intro;
+    if (it.phase !== 'title') return;
+    it.phase = 'release';
+    this.driver.V = Math.max(this.driver.V, 0.75);
+    this.driver.kick = Math.max(this.driver.kick, 0.45);
+    ui.set({ intro: 'leaving' });
+    // let the figure form before anything covers it
+    window.setTimeout(() => ui.set({ intro: 'done' }), 2600);
   }
 
   // ---------------------------------------------------------------- loop
@@ -173,6 +245,7 @@ export class Experience {
     inp.stability = this.driver.stability;
     inp.response = p.response;
     inp.paused = p.paused;
+    this.stepIntro(dt);
     this.renderer?.frame(inp);
 
     this.trackPerformance(rawMs, t);

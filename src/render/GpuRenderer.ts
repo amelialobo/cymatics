@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { NOISE_AMT, NOISE_WAVES, SYM_INDEX, WARP, MAX_ACTIVE } from '../pattern/modes';
 import { displayFrag, fieldFrag, pointsFrag, pointsVert, quadVert, simFrag } from './shaders';
 import { TUNE, plateLayout, type FrameInput, type PlateRenderer } from './types';
+import type { TitleMask } from './title';
 
 const FIELD_RES = 512;
 
@@ -40,6 +41,8 @@ export class GpuRenderer implements PlateRenderer {
   private posRT: THREE.WebGLRenderTarget[] = [];
   private posTex: THREE.Texture | null = null;
   private seedTex: THREE.DataTexture | null = null;
+  private titleTex: THREE.DataTexture;
+  private densityTex: THREE.DataTexture;
   private ping = 0;
   private texSize = 0;
   private frameNo = 0;
@@ -117,7 +120,12 @@ export class GpuRenderer implements PlateRenderer {
       uFrame: { value: 0 },
       uImp: { value: this.impArr },
       uImpN: { value: 0 },
+      uTitle: { value: null },
+      uTitleMix: { value: 0 },
+      uTitleGain: { value: 0 },
     };
+    this.titleTex = this.redTexture(new Uint8Array(1), 1);
+    this.simU.uTitle.value = this.titleTex;
     this.simScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, simFrag, this.simU)));
 
     this.displayU = {
@@ -138,7 +146,14 @@ export class GpuRenderer implements PlateRenderer {
       uScale: { value: new THREE.Vector2(1, 1) },
       uPointSize: { value: 1.5 },
       uBright: { value: 1 },
+      uDensity: { value: null },
+      uDensityMix: { value: 0 },
+      uLetters: { value: null },
+      uLettersGain: { value: 0 },
     };
+    this.densityTex = this.redTexture(new Uint8Array(1), 1);
+    this.pointsU.uDensity.value = this.densityTex;
+    this.pointsU.uLetters.value = this.titleTex;
   }
 
   private mat(vertexShader: string, fragmentShader: string, uniforms: Uniforms) {
@@ -252,6 +267,23 @@ export class GpuRenderer implements PlateRenderer {
     this.seed();
   }
 
+  private redTexture(data: Uint8Array, size: number) {
+    const t = new THREE.DataTexture(data, size, size, THREE.RedFormat, THREE.UnsignedByteType);
+    t.minFilter = t.magFilter = THREE.LinearFilter;
+    t.needsUpdate = true;
+    return t;
+  }
+
+  setTitle(mask: TitleMask | null) {
+    this.titleTex.dispose();
+    this.titleTex = mask ? this.redTexture(mask.data, mask.size) : this.redTexture(new Uint8Array(1), 1);
+    this.simU.uTitle.value = this.titleTex;
+    this.densityTex.dispose();
+    this.densityTex = mask ? this.redTexture(mask.density, mask.densitySize) : this.redTexture(new Uint8Array(1), 1);
+    this.pointsU.uDensity.value = this.densityTex;
+    this.pointsU.uLetters.value = this.titleTex;
+  }
+
   qualityDown() {
     if (this.texSize > 224) {
       this.setParticleBudget(this.particleCount * 0.72);
@@ -293,6 +325,8 @@ export class GpuRenderer implements PlateRenderer {
       this.impArr.set([im.x, im.y, im.r, im.s * f60], i * 4);
     }
     u.uImpN.value = n;
+    u.uTitleMix.value = inp.titleMix;
+    u.uTitleGain.value = inp.titleGain;
     const target = this.posRT[this.ping];
     this.gl.setRenderTarget(target);
     this.gl.render(this.simScene, this.camera);
@@ -305,7 +339,12 @@ export class GpuRenderer implements PlateRenderer {
     this.lift = Math.min(1.55, Math.max(1, 0.9 + inp.bank.meanLambda() / 110));
     this.pointsU.uBright.value = this.brightBase * this.lift;
     // the nodal field shows through more while the sand is in motion
-    this.displayU.uLine.value = 0.015 + 0.035 * Math.min(1, inp.V + inp.kick);
+    // while the title holds the sand, the plate's own lines stay hidden
+    const own = 1 - inp.titleMix;
+    this.displayU.uLine.value = (0.015 + 0.035 * Math.min(1, inp.V + inp.kick)) * own;
+    this.displayU.uHaze.value = 0.16 * own;
+    this.pointsU.uDensityMix.value = inp.titleMix;
+    this.pointsU.uLettersGain.value = inp.titleMix * inp.titleGain;
     const c = inp.colors;
     (this.displayU.uBgIn.value as THREE.Vector3).set(c[0], c[1], c[2]);
     (this.displayU.uSand.value as THREE.Vector3).set(c[3], c[4], c[5]);
@@ -369,6 +408,8 @@ export class GpuRenderer implements PlateRenderer {
     this.accumRT.dispose();
     this.posRT.forEach((rt) => rt.dispose());
     this.seedTex?.dispose();
+    this.titleTex.dispose();
+    this.densityTex.dispose();
     this.quad.dispose();
     for (const scene of [this.fieldScene, this.simScene, this.displayScene, this.pointsScene]) {
       scene.traverse((o) => {

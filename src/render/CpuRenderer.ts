@@ -3,6 +3,7 @@
  * and sand physics on the CPU, drawn to a 2D canvas. Fewer grains, same look.
  */
 import { TUNE, plateLayout, type FrameInput, type PlateRenderer } from './types';
+import { sampleTitle, type TitleMask } from './title';
 
 const N = 150; // field grid resolution
 
@@ -34,6 +35,8 @@ export class CpuRenderer implements PlateRenderer {
   private by = 1;
   private cssW = 1;
   private cssH = 1;
+  private title: TitleMask | null = null;
+  private readonly ts = { f: 0, dx: 0, dy: 0 };
 
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
@@ -93,6 +96,10 @@ export class CpuRenderer implements PlateRenderer {
     }
   }
 
+  setTitle(mask: TitleMask | null) {
+    this.title = mask;
+  }
+
   qualityDown() {
     if (this.count <= 12000) return false;
     this.setParticleBudget(this.count * 2 * 0.75);
@@ -122,6 +129,7 @@ export class CpuRenderer implements PlateRenderer {
     const maxStep = TUNE.maxStep * f60, ms2 = maxStep * maxStep;
     const kk = inp.kick * TUNE.kick * f60;
     const imps = inp.impulses;
+    const title = inp.titleMix > 0 ? this.title : null, tm = inp.titleMix, ts = this.ts;
     for (let k = 0; k < count; k++) {
       let x = px[k], y = py[k];
       const gx = (x + 1) * half, gy = (y + 1) * half;
@@ -131,9 +139,16 @@ export class CpuRenderer implements PlateRenderer {
       const fx = gx - i, fy = gy - j, c = j * N + i;
       const g00 = G[c], g10 = G[c + 1], g01 = G[c + N], g11 = G[c + N + 1];
       const a0 = g00 + (g10 - g00) * fx, a1 = g01 + (g11 - g01) * fx;
-      const f = a0 + (a1 - a0) * fy;
-      const dx = ((g10 - g00) * (1 - fy) + (g11 - g01) * fy) * half;
-      const dy = (a1 - a0) * half;
+      let f = a0 + (a1 - a0) * fy;
+      let dx = ((g10 - g00) * (1 - fy) + (g11 - g01) * fy) * half;
+      let dy = (a1 - a0) * half;
+      if (title) {
+        sampleTitle(title, x, y, ts);
+        const w = inp.titleGain;
+        f += (ts.f * w - f) * tm;
+        dx += (ts.dx * w - dx) * tm;
+        dy += (ts.dy * w - dy) * tm;
+      }
       const af = f < 0 ? -f : f;
       let amp = jitA * af * af + jit0 * (0.35 + af) + kk * (0.12 + af);
       for (const im of imps) {
@@ -159,7 +174,7 @@ export class CpuRenderer implements PlateRenderer {
     }
   }
 
-  private draw(colors: Float32Array) {
+  private draw(colors: Float32Array, titleMix: number, titleGain: number) {
     const buf = this.buf!, acc = this.acc, W = this.W, H = this.H, S = this.S;
     const br = colors[0] * 255, bgG = colors[1] * 255, bb = colors[2] * 255;
     const sr = colors[3] * 255 - br, sg = colors[4] * 255 - bgG, sb = colors[5] * 255 - bb;
@@ -167,9 +182,20 @@ export class CpuRenderer implements PlateRenderer {
     acc.fill(0);
     const cx = W * 0.5, cy = H * 0.5;
     const { px, py, pb, count } = this;
+    // opening title: a scattered handful rather than an even layer
+    const tm = this.title ? titleMix : 0, dens = this.title?.density, D = this.title?.densitySize ?? 1;
+    const letters = this.title?.data, L = this.title?.size ?? 1, bare = tm * titleGain;
     for (let k = 0; k < count; k++) {
       const sx = (cx + px[k] * S) | 0, sy = (cy - py[k] * S) | 0;
       if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+      if (tm > 0 && dens) {
+        const di = Math.min(D - 1, ((px[k] + 1) * 0.5 * D) | 0), dj = Math.min(D - 1, ((py[k] + 1) * 0.5 * D) | 0);
+        const h = (Math.imul(k, 2654435761) >>> 0) / 4294967296;
+        if (h > 1 + (dens[dj * D + di] / 255 - 1) * tm) continue;
+        // and none inside the letters
+        const li = Math.min(L - 1, ((px[k] + 1) * 0.5 * L) | 0), lj = Math.min(L - 1, ((py[k] + 1) * 0.5 * L) | 0);
+        if (letters![lj * L + li] > 90 && ((Math.imul(k, 1597334677) >>> 0) / 4294967296) < bare) continue;
+      }
       const idx = sy * W + sx;
       const a = (acc[idx] += pb[k] / 255);
       const t = 1 - Math.exp(-2.2 * a);
@@ -182,13 +208,13 @@ export class CpuRenderer implements PlateRenderer {
   frame(inp: FrameInput) {
     this.computeField(inp);
     if (!inp.paused) this.step(inp);
-    this.draw(inp.colors);
+    this.draw(inp.colors, inp.titleMix, inp.titleGain);
   }
 
   presettle(inp: FrameInput, steps: number) {
     this.computeField(inp);
     for (let i = 0; i < steps; i++) this.step(inp);
-    this.draw(inp.colors);
+    this.draw(inp.colors, inp.titleMix, inp.titleGain);
   }
 
   exportPNG(): Promise<Blob> {

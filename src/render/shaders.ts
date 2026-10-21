@@ -107,9 +107,17 @@ uniform float uMaxStep;
 uniform float uFrame;
 uniform vec4 uImp[4];        // pointer impulses: x, y, radius, strength
 uniform int uImpN;
+uniform sampler2D uTitle;    // opening title: letters shake, the rest stays still
+uniform float uTitleMix;
+uniform float uTitleGain;    // 0..1: how hard the letters shake
 ${hash}
 
-float field(vec2 p) { return texture2D(uField, p * 0.5 + 0.5).r; }
+float field(vec2 p) {
+  vec2 uv = p * 0.5 + 0.5;
+  float f = texture2D(uField, uv).r;
+  if (uTitleMix <= 0.0) return f;
+  return mix(f, texture2D(uTitle, uv).r * uTitleGain, uTitleMix);
+}
 
 void main() {
   vec4 P = texture2D(uPos, vUv);
@@ -189,13 +197,33 @@ uniform sampler2D uPos;
 uniform vec2 uScale;     // plate units → clip space
 uniform float uPointSize;
 uniform float uBright;
+uniform sampler2D uDensity;  // opening title: share of the sand that shows, by place
+uniform float uDensityMix;
+uniform sampler2D uLetters;  // the title's letters, kept bare of sand
+uniform float uLettersGain;
 varying float vB;
+${hash}
 void main() {
   vec4 P = texture2D(uPos, position.xy);
   gl_Position = vec4(P.xy * uScale, 0.0, 1.0);
   float edge = max(abs(P.x), abs(P.y));
   vB = P.w * uBright * smoothstep(1.0, 0.99, edge);
   gl_PointSize = uPointSize;
+  if (uDensityMix > 0.0) {
+    // a scattered handful rather than an even layer
+    float d = texture2D(uDensity, P.xy * 0.5 + 0.5).r;  // sparse near the word, none far away
+    vec2 uv = P.xy * 0.5 + 0.5;
+    float inLetter = step(0.35, texture2D(uLetters, uv).r) * step(hash12(position.xy * 4096.0 + 2.9), uLettersGain);
+    if (inLetter > 0.0 || hash12(position.xy * 4096.0 + 5.3) > mix(1.0, d, uDensityMix)) {
+      gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+      return;
+    }
+    // the odd grain catches the light, like glitter
+    if (hash12(position.xy * 4096.0 + 11.7) < 0.015 * uDensityMix) {
+      gl_PointSize = uPointSize * 2.0;
+      vB *= 1.5;
+    }
+  }
 }`;
 
 export const pointsFrag = /* glsl */ `

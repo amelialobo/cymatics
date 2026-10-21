@@ -4,13 +4,16 @@ import { setParams, toast, ui, useUI } from './core/store';
 import { AdjustPanel } from './ui/AdjustPanel';
 import { Dock, TopBar } from './ui/Bars';
 import { ExperienceContext, toggleFullscreen } from './ui/context';
-import { Bolt, Details, DropOverlay, FileInput, Help, Loader, NoRenderer, Toast, Welcome } from './ui/Overlays';
+import { Bolt, Details, DropOverlay, FileInput, Help, Intro, Loader, NoRenderer, Toast, Welcome } from './ui/Overlays';
+import { cx } from './ui/primitives';
 
 export default function App() {
   const stageRef = useRef<HTMLDivElement>(null);
   const [exp, setExp] = useState<Experience | null>(null);
   const [dragging, setDragging] = useState(false);
   const renderer = useUI((s) => s.renderer);
+  // the bars stay out of the way while the sand spells the title
+  const titled = useUI((s) => s.intro === 'forming' || s.intro === 'title');
 
   // the instrument lives outside React; mount it once, tear it down fully
   useEffect(() => {
@@ -33,6 +36,7 @@ export default function App() {
         ui.set({ panelOpen: false, helpOpen: false });
         return;
       }
+      if (ui.get().intro !== 'done') return;
       const el = e.target as HTMLElement;
       if (el.closest('input, textarea, select, [contenteditable]')) return;
       const onButton = !!el.closest('button, [role="radio"], [role="switch"], [role="tab"]');
@@ -86,6 +90,7 @@ export default function App() {
         toast('That file doesn’t look like audio.');
         return;
       }
+      exp.begin();
       exp.audio.loadFile(f);
       ui.set({ tab: 'file', welcome: false });
       toast(`“${f.name}” is ready. Press play.`);
@@ -111,10 +116,13 @@ export default function App() {
       />
       {renderer !== 'none' && <Bolt />}
       {renderer === 'none' && <NoRenderer />}
-      <TopBar />
-      <Details />
-      <Dock />
+      <div inert={titled} className={cx('transition-opacity duration-700', titled ? 'opacity-0' : 'opacity-100')}>
+        <TopBar />
+        <Details />
+        <Dock />
+      </div>
       <AdjustPanel />
+      <Intro />
       <FileInput />
       <Welcome />
       <Help />

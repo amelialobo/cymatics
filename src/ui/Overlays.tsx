@@ -4,10 +4,37 @@ import { openFilePicker, useExperience } from './context';
 import { Icon, type IconName } from './icons';
 import { Button, IconButton, cx } from './primitives';
 
+// --------------------------------------------------------------- intro
+/** the title the sand spells on load, and the button that sets it free */
+/** the title the sand spells while the plate gets ready; it hands over by itself */
+export function Intro() {
+  const phase = useUI((s) => (s.loading ? 'loading' : s.intro));
+  const gap = useUI((s) => s.titleBottom);
+  const show = phase === 'forming' || phase === 'title';
+  if (phase === 'done') return null;
+  return (
+    <div className="pointer-events-none fixed inset-0 z-30">
+      <h1 className="sr-only">Cymatics</h1>
+      <div
+        className={cx(
+          'absolute inset-x-0 flex justify-center px-4 transition-opacity duration-500',
+          show ? 'opacity-100' : 'opacity-0'
+        )}
+        style={{ top: `calc(50% + ${gap}px + clamp(20px, 4vh, 44px))` }}
+      >
+        <p role="status" className="flex items-center gap-2.5 rounded-full bg-black/70 px-4 py-1.5 text-[15px] text-white backdrop-blur-sm sm:text-[16px]">
+          <span aria-hidden className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/25 border-t-white" />
+          Preparing the plate…
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------- welcome
 export function Welcome() {
   const exp = useExperience();
-  const show = useUI((s) => s.welcome && !s.loading);
+  const show = useUI((s) => s.welcome && !s.loading && s.intro === 'done');
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (show) first.current?.focus({ preventScroll: true });
@@ -198,24 +225,17 @@ export function Details() {
 }
 
 // -------------------------------------------------------------- others
+/** a black cover until the first frame is drawn; the intro carries the loading message */
 export function Loader() {
   const loading = useUI((s) => s.loading);
   return (
     <div
-      role="status"
-      aria-hidden={!loading}
+      aria-hidden
       className={cx(
-        'fixed inset-0 z-50 grid place-items-center bg-black transition-opacity duration-700',
+        'fixed inset-0 z-50 bg-black transition-opacity duration-700',
         loading ? 'opacity-100' : 'pointer-events-none opacity-0'
       )}
-    >
-      <div className="grid justify-items-center gap-3">
-        <span className="grid h-10 w-10 place-items-center rounded-full ring-1 ring-white/70">
-          <span className="breathe h-3 w-3 rounded-full bg-white" />
-        </span>
-        <span className="text-[14px] text-soft">Preparing the plate…</span>
-      </div>
-    </div>
+    />
   );
 }
 
@@ -274,10 +294,15 @@ export function FileInput() {
 
 /** the screw that drives the plate, as in the photographs */
 export function Bolt() {
+  // hidden while the title sits where it would be
+  const hidden = useUI((s) => s.intro === 'forming' || s.intro === 'title');
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed left-1/2 top-1/2 z-[1] h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full"
+      className={cx(
+        'pointer-events-none fixed left-1/2 top-1/2 z-[1] h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full transition-opacity duration-700',
+        hidden ? 'opacity-0' : 'opacity-100'
+      )}
       style={{
         background:
           'radial-gradient(circle at 50% 50%, #0b0b0b 0 22%, transparent 24%), radial-gradient(circle at 38% 32%, #f2f2f2 0, #999 32%, #3a3a3a 62%, #111 80%)',
