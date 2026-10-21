@@ -250,10 +250,10 @@ export class Experience {
     }
     this.bank.pack();
     this.bank.normalise(p.symmetry);
-    // the colours follow the figure the sand is drawing
+    // the colours follow the pitch, and hold still in silence
     const sounding = F.active && F.level > 0.02 && F.dominantHz > 20;
     this.color.setFixed(p.bgColor, p.sandColor);
-    this.color.update(dt, sounding ? F.dominantHz : null, F.active, this.bank.meanLambda(), this.reduced);
+    this.color.update(dt, sounding ? F.dominantHz : null, this.reduced);
 
     this.impulses.length = 0;
     this.pointers.forEach((im) => this.impulses.push(im));
