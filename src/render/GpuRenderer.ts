@@ -10,7 +10,10 @@ import type { TitleMask } from './title';
 
 const FIELD_RES = 512;
 /** sand is reserved once at this size (grains = size²); quality only changes how much of it is active */
-const CAPACITY = matchMedia('(pointer: coarse)').matches ? 640 : 1024;
+const COARSE = matchMedia('(pointer: coarse)').matches;
+const CAPACITY = COARSE ? 768 : 1024;
+/** a phone's pixels are physically small: its grains are drawn a little wider to match */
+const GRAIN_PX = COARSE ? 1.5 : 1.0;
 const MIN_ACTIVE = 16000;
 
 export function gpuSupported(): boolean {
@@ -199,7 +202,7 @@ export class GpuRenderer implements PlateRenderer {
     this.displayU.uSide.value = side * pr;
     (this.pointsU.uScale.value as THREE.Vector2).set(side / this.cssW, side / this.cssH);
     // grains stay about one physical grain wide at any resolution
-    this.pointsU.uPointSize.value = Math.max(1, pr * 1.0);
+    this.pointsU.uPointSize.value = Math.max(1, pr * GRAIN_PX);
     this.brightBase = pr < 1 ? 0.85 : 1;
     this.pointsU.uBright.value = this.brightBase * this.lift;
   }
