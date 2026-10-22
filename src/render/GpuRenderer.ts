@@ -4,7 +4,7 @@
  */
 import * as THREE from 'three';
 import { NOISE_AMT, NOISE_WAVES, SYM_INDEX, WARP, MAX_ACTIVE } from '../pattern/modes';
-import { displayFrag, fieldFrag, pointsFrag, pointsVert, quadVert, simFrag } from './shaders';
+import { displayFrag, fieldFrag, pointsFrag, pointsVert, pourFrag, quadVert, simFrag } from './shaders';
 import { TUNE, plateLayout, type FrameInput, type PlateRenderer } from './types';
 import type { TitleMask } from './title';
 
@@ -43,6 +43,13 @@ export class GpuRenderer implements PlateRenderer {
   private fieldU: Uniforms;
 
   private simScene = new THREE.Scene();
+  private pourScene = new THREE.Scene();
+  private pourU: Uniforms = {
+    uPos: { value: null },
+    uOld: { value: 0 },
+    uSize: { value: 1 },
+    uJitter: { value: 0.004 },
+  };
   private simU: Uniforms;
   private posRT: THREE.WebGLRenderTarget[] = [];
   private posTex: THREE.Texture | null = null;
@@ -146,6 +153,7 @@ export class GpuRenderer implements PlateRenderer {
     this.titleTex = this.redTexture(new Uint8Array(1), 1);
     this.simU.uTitle.value = this.titleTex;
     this.simScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, simFrag, this.simU)));
+    this.pourScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, pourFrag, this.pourU)));
 
     this.displayU = {
       uField: { value: this.fieldRT.texture },
@@ -243,12 +251,28 @@ export class GpuRenderer implements PlateRenderer {
     const want = Math.min(size * size, Math.max(MIN_ACTIVE, Math.round(this.budget * this.quality)));
     const rows = Math.max(1, Math.min(size, Math.ceil(want / size)));
     if (rows === this.activeRows) return;
+    const prev = this.activeRows;
     this.activeRows = rows;
     for (const rt of this.posRT) {
       rt.scissor.set(0, 0, size, rows);
       rt.scissorTest = true;
     }
     this.points?.geometry.setDrawRange(0, rows * size);
+    if (prev > 0 && rows > prev) this.pour(prev);
+  }
+
+  /** the newly active grains start beside ones already on the figure */
+  private pour(oldRows: number) {
+    const u = this.pourU;
+    u.uPos.value = this.posTex;
+    u.uOld.value = oldRows;
+    u.uSize.value = this.texSize;
+    const target = this.posRT[this.ping];
+    this.gl.setRenderTarget(target);
+    this.gl.render(this.pourScene, this.camera);
+    this.gl.setRenderTarget(null);
+    this.posTex = target.texture;
+    this.ping ^= 1;
   }
 
   private allocParticles(size: number) {
@@ -493,7 +517,7 @@ export class GpuRenderer implements PlateRenderer {
     this.titleTex.dispose();
     this.densityTex.dispose();
     this.quad.dispose();
-    for (const scene of [this.fieldScene, this.simScene, this.displayScene, this.pointsScene]) {
+    for (const scene of [this.fieldScene, this.simScene, this.pourScene, this.displayScene, this.pointsScene]) {
       scene.traverse((o) => {
         const m = (o as THREE.Mesh).material as THREE.Material | undefined;
         m?.dispose();

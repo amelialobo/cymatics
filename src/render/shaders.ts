@@ -155,8 +155,7 @@ void main() {
   vec2 r = vec2(hash12(seed), hash12(seed + 17.13)) - 0.5;
   p += s + r * amp;
 
-  // as the stamp lifts, the sand on it goes with it: grains in the letters
-  // are sprinkled elsewhere, so only sand that stays on the plate is left
+  // the letters stay bare: grains that land on them are sprinkled elsewhere
   bool lifted = uTitleMix >= 1.0 && texture2D(uTitle, p * 0.5 + 0.5).r > 0.5 && hash12(seed + 5.9) < uTitleGain;
 
   // grains that fall off the edge are sprinkled back on
@@ -164,6 +163,30 @@ void main() {
     p = vec2((hash12(seed + 3.7) * 2.0 - 1.0) * uBounds.x, mix(uFloor, uBounds.y, hash12(seed + 9.1)));
   }
   gl_FragColor = vec4(p, P.zw);
+}`;
+
+/**
+ * More sand poured onto a plate that is already singing: each new grain
+ * (rows from uOld up) starts right beside one already on the figure, so the
+ * lines simply fill out instead of a fresh layer drifting in.
+ */
+export const pourFrag = /* glsl */ `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uPos;
+uniform float uOld;      // rows already active
+uniform float uSize;     // particle texture side
+uniform float uJitter;   // plate units
+${hash}
+void main() {
+  vec4 P = texture2D(uPos, vUv);
+  if (floor(vUv.y * uSize) >= uOld) {
+    vec2 h = vUv * 4096.0;
+    vec2 src = vec2(hash12(h + 4.1), (floor(hash12(h + 1.7) * uOld) + 0.5) / uSize);
+    vec2 r = vec2(hash12(h + 8.3), hash12(h + 6.2)) - 0.5;
+    P.xy = texture2D(uPos, src).xy + r * uJitter;
+  }
+  gl_FragColor = P;
 }`;
 
 export const displayFrag = /* glsl */ `

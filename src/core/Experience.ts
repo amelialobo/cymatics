@@ -21,6 +21,17 @@ export interface ReadoutEls {
   complexity: HTMLElement | null;
 }
 
+/**
+ * grains while the title shows: the light layer the word was designed on,
+ * scaled to the screen as the plate's sand used to be
+ */
+function introSand(w: number, h: number, density: number, coarse: boolean) {
+  const base = coarse ? Math.max(w * h * 0.3, Math.min(w, h) * 1000) : w * h * 0.6;
+  return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 589824 : 1048576));
+}
+/** seconds to pour in the rest of the sand once the plate has taken over */
+const SAND_POUR = 3;
+
 /** the dock's height in css px, as the dock itself publishes it */
 function dockHeight() {
   return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-h')) || 0;
@@ -59,6 +70,11 @@ export class Experience {
   private readonly reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private readonly coarse = matchMedia('(pointer: coarse)').matches;
   /** opening title: 'title' while the sand spells it, 'release' while it lets go */
+  /** 0 while the intro holds the sand down to its light layer, 1 once it is all poured in */
+  private sandK = 0;
+  private sandT = 0;
+  /** the canvas stops overhanging the dock at the start of the next frame */
+  private dropOverhang = false;
   private intro = { phase: 'title' as 'title' | 'release' | 'off', t: -0.6, mix: 1, hold: 1, mask: null as TitleMask | null };
   /** white sand on black while the title shows, easing into the plate's own colours */
   private readonly introRgb = new Float32Array([0, 0, 0, 1, 1, 1]);
@@ -73,16 +89,13 @@ export class Experience {
     this.input = {
       dt: 1 / 60, bank: this.bank, symmetry: p.symmetry, V: 0, kick: 0,
       stability: 0, response: p.response, impulses: this.impulses, paused: false,
-      colors: this.introRgb, titleMix: 1, titleGain: 0, titleShake: 0, titleHold: 1,
+      colors: this.introRgb, titleMix: 1, titleGain: 1, titleShake: 0, titleHold: 1,
     };
 
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(container);
     this.resize();
-    if (this.renderer) {
-      const n = this.renderer.setParticleBudget(desiredParticles(container.clientWidth, container.clientHeight, p.density, this.coarse));
-      ui.set({ particleCount: n });
-    }
+    this.applyBudget();
 
     container.addEventListener('pointerdown', this.onDown);
     container.addEventListener('pointermove', this.onMove);
@@ -93,12 +106,7 @@ export class Experience {
     let prev = ui.get().params;
     this.unsub = ui.subscribe(() => {
       const next = ui.get().params;
-      if (next.density !== prev.density && this.renderer) {
-        const n = this.renderer.setParticleBudget(
-          desiredParticles(container.clientWidth, container.clientHeight, next.density, this.coarse)
-        );
-        ui.set({ particleCount: n });
-      }
+      if (next.density !== prev.density) this.applyBudget(next.density);
       // a new plate family: the sand has to migrate to new nodal lines
       if (next.symmetry !== prev.symmetry) this.driver.kick = Math.max(this.driver.kick, 0.35);
       prev = next;
@@ -158,7 +166,7 @@ export class Experience {
     window.setTimeout(() => ui.set({ loading: false }), 350);
   }
 
-  /** reduced motion: the sand is already settled and the stamp already lifted */
+  /** reduced motion: the sand is already settled around the word */
   private presettleTitle() {
     this.renderer?.presettle({ ...this.input, V: 0.32, kick: 0, dt: 1 / 60, stability: 0.6, titleMix: 1, titleGain: 1 }, 90);
   }
@@ -171,16 +179,31 @@ export class Experience {
     this.renderer?.setTitle(mask);
   }
 
+  /** as many grains as the screen and the density ask for, within the current cap */
+  private applyBudget(density = ui.get().params.density) {
+    const r = this.renderer, w = this.container.clientWidth, h = this.container.clientHeight;
+    if (!r || w <= 0 || h <= 0) return;
+    const full = desiredParticles(w, h, density, this.coarse);
+    const k = this.sandK, light = Math.min(full, introSand(w, h, density, this.coarse));
+    const n = r.setParticleBudget(k >= 1 ? full : light + (full - light) * k * k * (3 - 2 * k));
+    if (n !== ui.get().particleCount) ui.set({ particleCount: n });
+  }
+
+  /** once the plate has taken over from the title, pour in the rest of the sand */
+  private pourSand(dt: number) {
+    if (this.sandK >= 1 || this.intro.phase !== 'off') return;
+    this.sandT += dt;
+    this.sandK = Math.min(1, this.sandT / SAND_POUR);
+    this.applyBudget();
+  }
+
   private resize() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     this.renderer?.resize(w, h);
     // the dock stays hidden while the title shows: let the sand run to the bottom of the screen
     if (this.intro.phase === 'title') this.renderer?.setOverhang(dockHeight());
     // more screen, more sand: the reserve makes this seamless (no re-sprinkling)
-    if (this.renderer && w > 0 && h > 0) {
-      const n = this.renderer.setParticleBudget(desiredParticles(w, h, ui.get().params.density, this.coarse));
-      if (n !== ui.get().particleCount) ui.set({ particleCount: n });
-    }
+    if (w > 0 && h > 0) this.applyBudget();
     if (this.intro.mask && this.intro.phase === 'title') {
       this.buildTitle();
       // the sand was sprinkled over the old visible area (on phones the dock
@@ -191,9 +214,9 @@ export class Experience {
   }
 
   /**
-   * Sand is sprinkled over a stamp of the word: the layer bounces as it
-   * lands, settles, and then the stamp is lifted, leaving the letters bare.
-   * It holds for a moment, then releases by itself.
+   * Sand is sprinkled over the plate with the word already pressed into it:
+   * the layer bounces as it lands and settles around the bare letters. It
+   * holds for a moment, then releases by itself.
    */
   private stepIntro(dt: number) {
     const it = this.intro, inp = this.input;
@@ -202,9 +225,8 @@ export class Experience {
     if (it.phase === 'title') {
       const land = Math.min(1, Math.max(0, it.t / 1.4));
       const ring = (1 - land) * (1 - land);
-      // the stamp comes away in one quick lift once the sand is still
-      const k = Math.min(1, Math.max(0, (it.t - 1.6) / 0.35));
-      inp.titleGain = k * k * (3 - 2 * k);
+      // the word is in the sand from the start: the letters stay bare throughout
+      inp.titleGain = 1;
       inp.V = 0.1 + 0.9 * ring;
       inp.kick = 0.35 * ring;
       inp.stability = 0.6;
@@ -246,7 +268,8 @@ export class Experience {
     // let the figure form before anything covers it
     window.setTimeout(() => {
       ui.set({ intro: 'done' });
-      this.renderer?.setOverhang(0);
+      // resizing the canvas clears it: do it in the next frame, which redraws at once
+      this.dropOverhang = true;
     }, 2600);
   }
 
@@ -284,6 +307,11 @@ export class Experience {
     inp.response = p.response;
     inp.paused = p.paused;
     this.stepIntro(dt);
+    this.pourSand(dt);
+    if (this.dropOverhang) {
+      this.dropOverhang = false;
+      this.renderer?.setOverhang(0);
+    }
     const w0 = performance.now();
     this.renderer?.frame(inp);
     const work = performance.now() - w0;

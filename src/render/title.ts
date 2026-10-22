@@ -1,7 +1,6 @@
 /**
- * The opening title: a word left bare in the sand, as if a stamp had been
- * pressed onto the plate, sand sprinkled over it, and the stamp lifted away.
- * The plate holds still and the letters simply stay clear, with clean edges.
+ * The opening title: a word left bare in the sand, as if pressed in by a
+ * stamp. The sand lands around it and the letters stay clear, with clean edges.
  */
 
 export interface TitleMask {
@@ -139,7 +138,8 @@ function scatterDensity(mask: Uint8Array, size: number, D: number, em: number, b
       // tall screens: an even dusting edge to edge, a little lighter at the top and bottom
       const ey = Math.min(1, Math.abs((j + 0.5) / D * 2 - 1) / by);
       const dust = 0.13 * tall * (1 - 0.35 * ey * ey);
-      const d = 0.3 * Math.max(n, dust) * clump - 0.004;
+      // most of the sand shows near the word, so it reads clearly on a light layer
+      const d = Math.max(0.75 * n, 0.3 * dust) * clump - 0.004;
       out[j * D + i] = Math.round(255 * Math.min(1, Math.max(0, d)));
     }
   return out;

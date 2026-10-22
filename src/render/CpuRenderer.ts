@@ -96,8 +96,15 @@ export class CpuRenderer implements PlateRenderer {
     pm.set(this.pm.subarray(0, keep));
     pb.set(this.pb.subarray(0, keep));
     for (let k = keep; k < n; k++) {
-      px[k] = (rnd() * 2 - 1) * this.bx;
-      py[k] = this.floor + rnd() * (this.by - this.floor);
+      if (keep > 0) {
+        // poured onto a singing plate: start beside a grain already on the figure
+        const src = (rnd() * keep) | 0;
+        px[k] = px[src] + (rnd() - 0.5) * 0.004;
+        py[k] = py[src] + (rnd() - 0.5) * 0.004;
+      } else {
+        px[k] = (rnd() * 2 - 1) * this.bx;
+        py[k] = this.floor + rnd() * (this.by - this.floor);
+      }
       const dust = rnd() < 0.06;
       pm[k] = dust ? 0.12 + rnd() * 0.3 : 0.7 + rnd() * 0.3;
       pb[k] = dust ? 50 + rnd() * 80 : 90 + rnd() * rnd() * 165;
@@ -153,7 +160,7 @@ export class CpuRenderer implements PlateRenderer {
     const title = inp.titleMix > 0 || inp.titleHold > 0 ? this.title : null, ts = this.ts;
     // the plate shakes hardest in the middle, so the middle holds on longer
     const tm0 = inp.titleMix, tmHold = Math.max(tm0, inp.titleHold), tHalf = this.title?.right ?? 1;
-    // as the stamp lifts, the sand on it goes with it
+    // the letters stay bare: grains that land on them are sprinkled elsewhere
     const stamp = this.title && inp.titleMix >= 1 && inp.titleGain > 0 ? this.title : null;
     const L = stamp?.size ?? 1;
     for (let k = 0; k < count; k++) {
