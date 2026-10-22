@@ -101,6 +101,7 @@ uniform sampler2D uPos;      // xy position, z mobility, w brightness
 uniform sampler2D uField;
 uniform float uFieldTexel;   // 1 / field resolution
 uniform vec2 uBounds;        // visible part of the plate
+uniform float uFloor;        // lowest visible y: below -uBounds.y while the canvas overhangs
 uniform float uV;            // vibration
 uniform float uKick;         // transient bounce
 uniform float uJitter;       // bounce at antinodes, scaled by |f|²
@@ -110,16 +111,21 @@ uniform float uMaxStep;
 uniform float uFrame;
 uniform vec4 uImp[4];        // pointer impulses: x, y, radius, strength
 uniform int uImpN;
-uniform sampler2D uTitle;    // opening title: letters shake, the rest stays still
+uniform sampler2D uTitle;    // opening title: the stamp's letters
 uniform float uTitleMix;
-uniform float uTitleGain;    // 0..1: how hard the letters shake
+uniform float uTitleGain;    // 0..1: how far the stamp has lifted
+uniform float uTitleShake;   // 0 still under the stamp, 1 letters shake as the plate takes over
+uniform float uTitleHold;    // the middle of the word's mix, which lingers after the ends let go
+uniform float uTitleHalf;    // half the word's width, plate units
 ${hash}
 
 float field(vec2 p) {
   vec2 uv = p * 0.5 + 0.5;
   float f = texture2D(uField, uv).r;
-  if (uTitleMix <= 0.0) return f;
-  return mix(f, texture2D(uTitle, uv).r * uTitleGain, uTitleMix);
+  if (uTitleMix <= 0.0 && uTitleHold <= 0.0) return f;
+  // the plate shakes hardest in the middle, so the middle holds on longer
+  float m = mix(uTitleMix, max(uTitleMix, uTitleHold), 1.0 - smoothstep(0.0, uTitleHalf, abs(p.x)));
+  return mix(f, texture2D(uTitle, uv).r * uTitleGain * uTitleShake, m);
 }
 
 void main() {
@@ -149,9 +155,13 @@ void main() {
   vec2 r = vec2(hash12(seed), hash12(seed + 17.13)) - 0.5;
   p += s + r * amp;
 
+  // as the stamp lifts, the sand on it goes with it: grains in the letters
+  // are sprinkled elsewhere, so only sand that stays on the plate is left
+  bool lifted = uTitleMix >= 1.0 && texture2D(uTitle, p * 0.5 + 0.5).r > 0.5 && hash12(seed + 5.9) < uTitleGain;
+
   // grains that fall off the edge are sprinkled back on
-  if (abs(p.x) > uBounds.x || abs(p.y) > uBounds.y) {
-    p = (vec2(hash12(seed + 3.7), hash12(seed + 9.1)) * 2.0 - 1.0) * uBounds;
+  if (lifted || abs(p.x) > uBounds.x || p.y > uBounds.y || p.y < uFloor) {
+    p = vec2((hash12(seed + 3.7) * 2.0 - 1.0) * uBounds.x, mix(uFloor, uBounds.y, hash12(seed + 9.1)));
   }
   gl_FragColor = vec4(p, P.zw);
 }`;
@@ -163,6 +173,7 @@ uniform sampler2D uField;
 uniform sampler2D uAccum;   // how much sand landed on each pixel
 uniform float uFieldTexel;
 uniform vec2 uRes;    // drawing buffer, device px
+uniform vec2 uCentre; // plate centre in the drawing buffer, device px
 uniform float uSide;  // plate side, device px
 uniform float uLine;  // strength of the nodal-intensity lines
 uniform float uHaze;  // antinode haze
@@ -172,7 +183,7 @@ uniform vec3 uSand;
 float field(vec2 uv) { return texture2D(uField, uv).r; }
 
 void main() {
-  vec2 p = (gl_FragCoord.xy - 0.5 * uRes) / (0.5 * uSide);
+  vec2 p = (gl_FragCoord.xy - uCentre) / (0.5 * uSide);
   vec2 uv = clamp(p * 0.5 + 0.5, 0.0, 1.0);
   float h = uFieldTexel;
   float f = field(uv);
@@ -187,6 +198,9 @@ void main() {
   // one even background colour across the whole plate
   vec3 bg = uBgIn;
   // antinodes catch a little light; the nodal lines show faintly in the sand colour
+  // nothing beyond the plate's edge, where the canvas overhangs it
+  haze *= step(-1.0, p.y);
+  line *= step(-1.0, p.y);
   bg = mix(bg, mix(uBgIn, vec3(1.0), 0.25), haze);
   bg = mix(bg, uSand, line);
 
@@ -199,25 +213,27 @@ export const pointsVert = /* glsl */ `
 precision highp float;
 uniform sampler2D uPos;
 uniform vec2 uScale;     // plate units → clip space
+uniform vec2 uOffset;    // the plate centre, clip space
 uniform float uPointSize;
 uniform float uBright;
 uniform sampler2D uDensity;  // opening title: share of the sand that shows, by place
 uniform float uDensityMix;
 uniform sampler2D uLetters;  // the title's letters, kept bare of sand
-uniform float uLettersGain;
+uniform float uLettersGain;  // 0..1: how far the stamp has lifted
 varying float vB;
 ${hash}
 void main() {
   vec4 P = texture2D(uPos, position.xy);
-  gl_Position = vec4(P.xy * uScale, 0.0, 1.0);
-  float edge = max(abs(P.x), abs(P.y));
+  gl_Position = vec4(P.xy * uScale + uOffset, 0.0, 1.0);
+  // while the canvas overhangs the stage, sand below the plate stays visible
+  float edge = max(abs(P.x), uOffset.y > 0.0 ? P.y : abs(P.y));
   vB = P.w * uBright * smoothstep(1.0, 0.99, edge);
   gl_PointSize = uPointSize;
   if (uDensityMix > 0.0) {
     // a scattered handful rather than an even layer
     float d = texture2D(uDensity, P.xy * 0.5 + 0.5).r;  // sparse near the word, none far away
     vec2 uv = P.xy * 0.5 + 0.5;
-    float inLetter = step(0.35, texture2D(uLetters, uv).r) * step(hash12(position.xy * 4096.0 + 2.9), uLettersGain);
+    float inLetter = step(0.5, texture2D(uLetters, uv).r) * step(hash12(position.xy * 4096.0 + 2.9), uLettersGain);
     if (inLetter > 0.0 || hash12(position.xy * 4096.0 + 5.3) > mix(1.0, d, uDensityMix)) {
       gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
       return;

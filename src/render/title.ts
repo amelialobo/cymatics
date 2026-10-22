@@ -1,18 +1,16 @@
 /**
- * The opening title: a word drawn as a stand-in vibration field. The letters
- * shake and everything around them stays still, so the sand is thrown out of
- * the strokes and banks up along their edges, as if a finger wrote through it.
+ * The opening title: a word left bare in the sand, as if a stamp had been
+ * pressed onto the plate, sand sprinkled over it, and the stamp lifted away.
+ * The plate holds still and the letters simply stay clear, with clean edges.
  */
 
 export interface TitleMask {
-  /** size × size, row 0 at plate y = -1; 0 still, 255 shaking */
+  /** size × size, row 0 at plate y = -1; 0 sand, 255 inside a letter */
   data: Uint8Array;
   size: number;
   /** horizontal extent of the word, in plate units */
   left: number;
   right: number;
-  /** lowest point of the word, in plate units (y up) */
-  bottom: number;
   /**
    * densitySize² share of the sand that shows while the title holds, 0..255:
    * thick around the word, thinning and patchy towards the edges
@@ -46,27 +44,7 @@ function noise(x: number, y: number, s: number) {
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v - 0.5;
 }
 
-/**
- * Wobble the letter outlines: sand pushed aside never leaves a type-perfect
- * edge. A broad wander plus a fine crumble, both scaled to the letter size.
- */
-function roughen(src: Uint8Array, size: number, em: number, x0: number, x1: number, y0: number, y1: number) {
-  const out = src.slice();
-  const s = (Math.random() * 1e6) | 0;
-  const c1 = em * 0.07, a1 = em * 0.028, c2 = em * 0.02, a2 = em * 0.022;
-  for (let y = Math.max(0, y0); y < Math.min(size, y1); y++) {
-    for (let x = Math.max(0, x0); x < Math.min(size, x1); x++) {
-      const dx = noise(x / c1, y / c1, s) * a1 + noise(x / c2, y / c2, s + 7) * a2;
-      const dy = noise(x / c1, y / c1, s + 3) * a1 + noise(x / c2, y / c2, s + 11) * a2;
-      const sx = Math.min(size - 1, Math.max(0, Math.round(x + dx)));
-      const sy = Math.min(size - 1, Math.max(0, Math.round(y + dy)));
-      out[y * size + x] = src[sy * size + sx];
-    }
-  }
-  src.set(out);
-}
-
-/** box blur, in place: softens the stroke edges into a slope the sand can slide down */
+/** box blur, in place */
 function blur(src: Uint8Array, size: number, r: number) {
   const tmp = new Uint8Array(src.length);
   const span = 2 * r + 1;
@@ -118,27 +96,23 @@ export function buildTitleMask(text: string, bx: number, by: number, size = 1024
     const dst = (size - 1 - row) * size, src = row * size;
     for (let col = 0; col < size; col++) data[dst + col] = rgba[(src + col) * 4];
   }
-  const pad = Math.ceil(px * 0.1);
-  const w0 = Math.floor(half - (m.width * scale) / 2) - pad, w1 = Math.ceil(half + (m.width * scale) / 2) + pad;
-  // rows are flipped: the word sits between these, measured from the bottom
-  const top = size - Math.floor(baseline - asc * scale) + pad, bot = size - Math.ceil(baseline + desc * scale) - pad;
-  roughen(data, size, px, w0, w1, bot, top);
-  blur(data, size, 1);
+  // the stamp's edge is left as the font draws it: no wobble, no soft slope
 
   const w = (m.width * scale) / half;
   const D = 256;
   return {
-    data, size, left: -w / 2, right: w / 2, bottom: -(baseline + desc * scale - half) / half,
-    density: scatterDensity(data, size, D, px), densitySize: D,
+    data, size, left: -w / 2, right: w / 2,
+    density: scatterDensity(data, size, D, px, bx, by), densitySize: D,
   };
 }
 
 /**
  * Where the sand lies thick and where it thins out, as when a handful is
  * spread around a word: a soft halo round the letters, uneven clumps, and
- * a light dusting further away.
+ * a light dusting further away. On a squarish or tall screen the word is a
+ * thin band, so the sand reaches top to bottom instead.
  */
-function scatterDensity(mask: Uint8Array, size: number, D: number, em: number) {
+function scatterDensity(mask: Uint8Array, size: number, D: number, em: number, bx: number, by: number) {
   const f = size / D;
   const near = new Uint8Array(D * D);
   for (let j = 0; j < D; j++)
@@ -154,13 +128,18 @@ function scatterDensity(mask: Uint8Array, size: number, D: number, em: number) {
   let peak = 1;
   for (let k = 0; k < near.length; k++) peak = Math.max(peak, near[k]);
   const s = (Math.random() * 1e6) | 0;
+  // 0 on a wide screen, 1 once the screen is square or taller
+  const tall = Math.min(1, Math.max(0, (by / bx - 0.8) / 0.2));
   const out = new Uint8Array(D * D);
   for (let j = 0; j < D; j++)
     for (let i = 0; i < D; i++) {
       // a light sprinkle near the word, fading to bare plate further out
       const n = Math.pow(near[j * D + i] / peak, 1.3);
       const clump = 0.4 + 1.2 * (noise(i / 9, j / 9, s) + 0.5) * (0.7 + 0.6 * (noise(i / 2.5, j / 2.5, s + 5) + 0.5));
-      const d = 0.3 * n * clump - 0.004;
+      // tall screens: an even dusting edge to edge, a little lighter at the top and bottom
+      const ey = Math.min(1, Math.abs((j + 0.5) / D * 2 - 1) / by);
+      const dust = 0.13 * tall * (1 - 0.35 * ey * ey);
+      const d = 0.3 * Math.max(n, dust) * clump - 0.004;
       out[j * D + i] = Math.round(255 * Math.min(1, Math.max(0, d)));
     }
   return out;

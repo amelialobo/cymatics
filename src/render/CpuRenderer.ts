@@ -31,10 +31,16 @@ export class CpuRenderer implements PlateRenderer {
   private W = 1;
   private H = 1;
   private S = 1;
+  /** plate centre, canvas px from the top */
+  private cy = 0.5;
   private bx = 1;
   private by = 1;
   private cssW = 1;
   private cssH = 1;
+  private overhang = 0;
+  private overhangSand = true;
+  /** lowest visible y: below -by while the canvas overhangs the stage */
+  private floor = -1;
   private title: TitleMask | null = null;
   private readonly ts = { f: 0, dx: 0, dy: 0 };
 
@@ -57,7 +63,8 @@ export class CpuRenderer implements PlateRenderer {
     let rs = Math.min(window.devicePixelRatio || 1, 1.5);
     if (cssW * cssH * rs * rs > 2.2e6) rs = Math.sqrt(2.2e6 / (cssW * cssH));
     this.W = Math.max(1, Math.round(this.cssW * rs));
-    this.H = Math.max(1, Math.round(this.cssH * rs));
+    this.H = Math.max(1, Math.round((this.cssH + this.overhang) * rs));
+    this.cy = (this.cssH / 2) * rs;
     this.canvas.width = this.W;
     this.canvas.height = this.H;
     this.img = this.ctx.createImageData(this.W, this.H);
@@ -67,6 +74,16 @@ export class CpuRenderer implements PlateRenderer {
     this.S = (side * rs) / 2;
     this.bx = bx;
     this.by = by;
+    this.floor = -by - (this.overhangSand ? (2 * this.overhang) / side : 0);
+    this.canvas.style.height = this.overhang ? `calc(100% + ${this.overhang}px)` : '';
+  }
+
+  setOverhang(px: number, sand = true) {
+    px = Math.max(0, Math.round(px));
+    if (px === this.overhang && sand === this.overhangSand) return;
+    this.overhang = px;
+    this.overhangSand = sand;
+    this.resize(this.cssW, this.cssH);
   }
 
   setParticleBudget(n: number) {
@@ -80,7 +97,7 @@ export class CpuRenderer implements PlateRenderer {
     pb.set(this.pb.subarray(0, keep));
     for (let k = keep; k < n; k++) {
       px[k] = (rnd() * 2 - 1) * this.bx;
-      py[k] = (rnd() * 2 - 1) * this.by;
+      py[k] = this.floor + rnd() * (this.by - this.floor);
       const dust = rnd() < 0.06;
       pm[k] = dust ? 0.12 + rnd() * 0.3 : 0.7 + rnd() * 0.3;
       pb[k] = dust ? 50 + rnd() * 80 : 90 + rnd() * rnd() * 165;
@@ -92,7 +109,7 @@ export class CpuRenderer implements PlateRenderer {
   scatter() {
     for (let k = 0; k < this.count; k++) {
       this.px[k] = (rnd() * 2 - 1) * this.bx;
-      this.py[k] = (rnd() * 2 - 1) * this.by;
+      this.py[k] = this.floor + rnd() * (this.by - this.floor);
     }
   }
 
@@ -126,14 +143,19 @@ export class CpuRenderer implements PlateRenderer {
     const f60 = Math.min(inp.dt * 60, 3);
     const V = inp.V;
     const G = this.G, half = (N - 1) * 0.5, n2 = N - 2;
-    const { px, py, pm, count, bx, by } = this;
+    const { px, py, pm, count, bx, by, floor } = this;
     const jitA = V * TUNE.jitter * f60;
     const jit0 = V * TUNE.diffuse * f60 * (1 - 0.45 * inp.stability);
     const pull = Math.min(0.6, V * TUNE.pull * inp.response * f60);
     const maxStep = TUNE.maxStep * f60, ms2 = maxStep * maxStep;
     const kk = inp.kick * TUNE.kick * f60;
     const imps = inp.impulses;
-    const title = inp.titleMix > 0 ? this.title : null, tm = inp.titleMix, ts = this.ts;
+    const title = inp.titleMix > 0 || inp.titleHold > 0 ? this.title : null, ts = this.ts;
+    // the plate shakes hardest in the middle, so the middle holds on longer
+    const tm0 = inp.titleMix, tmHold = Math.max(tm0, inp.titleHold), tHalf = this.title?.right ?? 1;
+    // as the stamp lifts, the sand on it goes with it
+    const stamp = this.title && inp.titleMix >= 1 && inp.titleGain > 0 ? this.title : null;
+    const L = stamp?.size ?? 1;
     for (let k = 0; k < count; k++) {
       let x = px[k], y = py[k];
       const gx = (x + 1) * half, gy = (y + 1) * half;
@@ -148,7 +170,8 @@ export class CpuRenderer implements PlateRenderer {
       let dy = (a1 - a0) * half;
       if (title) {
         sampleTitle(title, x, y, ts);
-        const w = inp.titleGain;
+        const e = Math.min(1, Math.abs(x) / tHalf), tm = tm0 + (tmHold - tm0) * (1 - e * e * (3 - 2 * e));
+        const w = inp.titleGain * inp.titleShake;
         f += (ts.f * w - f) * tm;
         dx += (ts.dx * w - dx) * tm;
         dy += (ts.dy * w - dy) * tm;
@@ -169,9 +192,11 @@ export class CpuRenderer implements PlateRenderer {
       }
       x += sx + (rnd() - 0.5) * amp;
       y += sy + (rnd() - 0.5) * amp;
-      if (x < -bx || x > bx || y < -by || y > by) {
+      const lifted = stamp !== null && rnd() < inp.titleGain &&
+        stamp.data[Math.min(L - 1, Math.max(0, ((y + 1) * 0.5 * L) | 0)) * L + Math.min(L - 1, Math.max(0, ((x + 1) * 0.5 * L) | 0))] > 127;
+      if (lifted || x < -bx || x > bx || y < floor || y > by) {
         x = (rnd() * 2 - 1) * bx;
-        y = (rnd() * 2 - 1) * by;
+        y = floor + rnd() * (by - floor);
       }
       px[k] = x;
       py[k] = y;
@@ -184,7 +209,7 @@ export class CpuRenderer implements PlateRenderer {
     const sr = colors[3] * 255 - br, sg = colors[4] * 255 - bgG, sb = colors[5] * 255 - bb;
     buf.fill((0xff000000 | (bb << 16) | (bgG << 8) | br) >>> 0);
     acc.fill(0);
-    const cx = W * 0.5, cy = H * 0.5;
+    const cx = W * 0.5, cy = this.cy;
     const { px, py, pb, count } = this;
     // opening title: a scattered handful rather than an even layer
     const tm = this.title ? titleMix : 0, dens = this.title?.density, D = this.title?.densitySize ?? 1;
@@ -198,7 +223,7 @@ export class CpuRenderer implements PlateRenderer {
         if (h > 1 + (dens[dj * D + di] / 255 - 1) * tm) continue;
         // and none inside the letters
         const li = Math.min(L - 1, ((px[k] + 1) * 0.5 * L) | 0), lj = Math.min(L - 1, ((py[k] + 1) * 0.5 * L) | 0);
-        if (letters![lj * L + li] > 90 && ((Math.imul(k, 1597334677) >>> 0) / 4294967296) < bare) continue;
+        if (letters![lj * L + li] > 127 && ((Math.imul(k, 1597334677) >>> 0) / 4294967296) < bare) continue;
       }
       const idx = sy * W + sx;
       const a = (acc[idx] += pb[k] / 255);

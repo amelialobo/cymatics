@@ -21,6 +21,11 @@ export interface ReadoutEls {
   complexity: HTMLElement | null;
 }
 
+/** the dock's height in css px, as the dock itself publishes it */
+function dockHeight() {
+  return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-h')) || 0;
+}
+
 const NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 function noteName(hz: number) {
   const m = Math.round(69 + 12 * Math.log2(hz / 440));
@@ -54,7 +59,7 @@ export class Experience {
   private readonly reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private readonly coarse = matchMedia('(pointer: coarse)').matches;
   /** opening title: 'title' while the sand spells it, 'release' while it lets go */
-  private intro = { phase: 'title' as 'title' | 'release' | 'off', t: -0.6, mix: 1, mask: null as TitleMask | null };
+  private intro = { phase: 'title' as 'title' | 'release' | 'off', t: -0.6, mix: 1, hold: 1, mask: null as TitleMask | null };
   /** white sand on black while the title shows, easing into the plate's own colours */
   private readonly introRgb = new Float32Array([0, 0, 0, 1, 1, 1]);
   private ro: ResizeObserver;
@@ -68,7 +73,7 @@ export class Experience {
     this.input = {
       dt: 1 / 60, bank: this.bank, symmetry: p.symmetry, V: 0, kick: 0,
       stability: 0, response: p.response, impulses: this.impulses, paused: false,
-      colors: this.introRgb, titleMix: 1, titleGain: 0,
+      colors: this.introRgb, titleMix: 1, titleGain: 0, titleShake: 0, titleHold: 1,
     };
 
     this.ro = new ResizeObserver(() => this.resize());
@@ -143,7 +148,7 @@ export class Experience {
     if (!this.renderer) return; // disposed while the font loaded
     this.buildTitle();
     if (this.reduced) {
-      // no shaking: the word is simply there
+      // no landing: the word is simply there
       this.intro.t = 2.4;
       this.presettleTitle();
     }
@@ -153,23 +158,24 @@ export class Experience {
     window.setTimeout(() => ui.set({ loading: false }), 350);
   }
 
-  /** reduced motion: settle the word out of sight instead of shaking it into place */
+  /** reduced motion: the sand is already settled and the stamp already lifted */
   private presettleTitle() {
     this.renderer?.presettle({ ...this.input, V: 0.32, kick: 0, dt: 1 / 60, stability: 0.6, titleMix: 1, titleGain: 1 }, 90);
   }
 
   private buildTitle() {
     const { clientWidth: w, clientHeight: h } = this.container;
-    const { side, bx, by } = plateLayout(w, h);
+    const { bx, by } = plateLayout(w, h);
     const mask = buildTitleMask('Cymatics', bx, by);
     this.intro.mask = mask;
     this.renderer?.setTitle(mask);
-    ui.set({ titleBottom: Math.round((-mask.bottom * side) / 2) });
   }
 
   private resize() {
     const w = this.container.clientWidth, h = this.container.clientHeight;
     this.renderer?.resize(w, h);
+    // the dock stays hidden while the title shows: let the sand run to the bottom of the screen
+    if (this.intro.phase === 'title') this.renderer?.setOverhang(dockHeight());
     // more screen, more sand: the reserve makes this seamless (no re-sprinkling)
     if (this.renderer && w > 0 && h > 0) {
       const n = this.renderer.setParticleBudget(desiredParticles(w, h, ui.get().params.density, this.coarse));
@@ -185,28 +191,31 @@ export class Experience {
   }
 
   /**
-   * The plate is struck: the whole layer of sand jumps, and as the ringing
-   * dies down the grains shake out of every letter at once. It holds for a
-   * moment, then releases by itself.
+   * Sand is sprinkled over a stamp of the word: the layer bounces as it
+   * lands, settles, and then the stamp is lifted, leaving the letters bare.
+   * It holds for a moment, then releases by itself.
    */
   private stepIntro(dt: number) {
     const it = this.intro, inp = this.input;
     if (it.phase === 'off') return;
     it.t += dt;
     if (it.phase === 'title') {
-      const k = Math.min(1, Math.max(0, it.t / 2.4));
-      const ring = (1 - k) * (1 - k);
+      const land = Math.min(1, Math.max(0, it.t / 1.4));
+      const ring = (1 - land) * (1 - land);
+      // the stamp comes away in one quick lift once the sand is still
+      const k = Math.min(1, Math.max(0, (it.t - 1.6) / 0.35));
       inp.titleGain = k * k * (3 - 2 * k);
-      // settles to a low hum, so the sand banks up crisply along the letters
-      inp.V = 0.2 + 0.8 * ring;
+      inp.V = 0.1 + 0.9 * ring;
       inp.kick = 0.35 * ring;
       inp.stability = 0.6;
-      if (k >= 1 && ui.get().intro === 'forming') ui.set({ intro: 'title' });
+      if (it.t >= 2.4 && ui.get().intro === 'forming') ui.set({ intro: 'title' });
       // hold the word a moment, then let the plate take over on its own
       if (it.t > 3.8) this.begin();
     } else {
-      it.mix = Math.max(0, it.mix - dt / 1.3);
-      if (it.mix === 0) {
+      it.mix = Math.max(0, 1 - it.t / 1.3);
+      // the middle of the word stays on the plate a second longer
+      it.hold = Math.min(1, Math.max(0, 1 - (it.t - 1) / 1.3));
+      if (it.hold === 0) {
         it.phase = 'off';
         it.mask = null;
         this.renderer?.setTitle(null);
@@ -214,6 +223,8 @@ export class Experience {
       }
     }
     inp.titleMix = it.mix;
+    inp.titleShake = it.phase === 'release' ? 1 : 0;
+    inp.titleHold = it.phase === 'off' ? 0 : it.hold;
     if (it.phase !== 'off') {
       const pal = this.color.rgb, w = it.mix, rgb = this.introRgb;
       for (let i = 0; i < 6; i++) rgb[i] = pal[i] + ((i < 3 ? 0 : 1) - pal[i]) * w;
@@ -225,11 +236,18 @@ export class Experience {
     const it = this.intro;
     if (it.phase !== 'title') return;
     it.phase = 'release';
+    it.t = 0;
+    // the grains below the plate are thrown back onto it; the canvas stays
+    // under the dock while it fades in, so no bare strip shows
+    this.renderer?.setOverhang(dockHeight(), false);
     this.driver.V = Math.max(this.driver.V, 0.75);
     this.driver.kick = Math.max(this.driver.kick, 0.45);
     ui.set({ intro: 'leaving' });
     // let the figure form before anything covers it
-    window.setTimeout(() => ui.set({ intro: 'done' }), 2600);
+    window.setTimeout(() => {
+      ui.set({ intro: 'done' });
+      this.renderer?.setOverhang(0);
+    }, 2600);
   }
 
   // ---------------------------------------------------------------- loop

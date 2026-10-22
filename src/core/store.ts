@@ -36,8 +36,6 @@ export type IntroPhase = 'forming' | 'title' | 'leaving' | 'done';
 export interface UIState {
   tab: SourceKind;
   intro: IntroPhase;
-  /** how far below the screen centre the title's letters reach, css px */
-  titleBottom: number;
   /** the Adjust panel */
   panelOpen: boolean;
   /** the Colours pop-up */
@@ -93,7 +91,6 @@ function createStore<T extends object>(initial: T) {
 export const ui = createStore<UIState>({
   tab: 'tone',
   intro: 'forming',
-  titleBottom: 80,
   panelOpen: false,
   coloursOpen: false,
   helpOpen: false,

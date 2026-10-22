@@ -20,8 +20,15 @@ export interface FrameInput {
   colors: Float32Array;
   /** 0..1: how much the opening title replaces the plate's own field */
   titleMix: number;
-  /** 0..1: how strongly the title's letters shake the sand out */
+  /** 0..1: how far the title's stamp has lifted, leaving its letters bare */
   titleGain: number;
+  /**
+   * 0 while the title holds: the plate stays still under the stamp. 1 as it
+   * hands over: the letters shake, so the sand runs from the word to the figure
+   */
+  titleShake: number;
+  /** 0..1: the middle of the word lets go later than its ends; this is its own mix */
+  titleHold: number;
 }
 
 export interface PlateRenderer {
@@ -29,6 +36,13 @@ export interface PlateRenderer {
   readonly canvas: HTMLCanvasElement;
   readonly particleCount: number;
   resize(cssW: number, cssH: number): void;
+  /**
+   * let the canvas hang this many css px below the stage, over the hidden
+   * dock, so the opening sand reaches the bottom of the screen; the plate
+   * itself keeps its size and centre. With `sand` false the canvas still
+   * overhangs but grains stay on the plate.
+   */
+  setOverhang(px: number, sand?: boolean): void;
   /** set the grain budget (approximate); returns the actual count */
   setParticleBudget(n: number): number;
   frame(input: FrameInput): void;

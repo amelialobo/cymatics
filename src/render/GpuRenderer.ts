@@ -68,11 +68,14 @@ export class GpuRenderer implements PlateRenderer {
 
   private cssW = 1;
   private cssH = 1;
+  private overhang = 0;
+  private overhangSand = true;
   private dpr = Math.min(window.devicePixelRatio || 1, 2);
   private prScale = 1;
   private brightBase = 1;
   private lift = 1;
   private bounds = new THREE.Vector2(1, 1);
+  private floor = { value: -1 };
   private bufSize = new THREE.Vector2();
   private readonly modesArr = new Float32Array(MAX_ACTIVE * 4);
   private readonly impArr = new Float32Array(16);
@@ -123,6 +126,7 @@ export class GpuRenderer implements PlateRenderer {
       uField: { value: this.fieldRT.texture },
       uFieldTexel: { value: 1 / FIELD_RES },
       uBounds: { value: this.bounds },
+      uFloor: this.floor,
       uV: { value: 0 },
       uKick: { value: 0 },
       uJitter: { value: TUNE.jitter },
@@ -132,9 +136,12 @@ export class GpuRenderer implements PlateRenderer {
       uFrame: { value: 0 },
       uImp: { value: this.impArr },
       uImpN: { value: 0 },
-      uTitle: { value: null },
       uTitleMix: { value: 0 },
+      uTitle: { value: null },
       uTitleGain: { value: 0 },
+      uTitleShake: { value: 0 },
+      uTitleHold: { value: 0 },
+      uTitleHalf: { value: 1 },
     };
     this.titleTex = this.redTexture(new Uint8Array(1), 1);
     this.simU.uTitle.value = this.titleTex;
@@ -145,6 +152,7 @@ export class GpuRenderer implements PlateRenderer {
       uAccum: { value: this.accumRT.texture },
       uFieldTexel: { value: 1 / FIELD_RES },
       uRes: { value: new THREE.Vector2() },
+      uCentre: { value: new THREE.Vector2() },
       uSide: { value: 1 },
       uLine: { value: 0.06 },
       uHaze: { value: 0.16 },
@@ -156,6 +164,7 @@ export class GpuRenderer implements PlateRenderer {
     this.pointsU = {
       uPos: { value: null },
       uScale: { value: new THREE.Vector2(1, 1) },
+      uOffset: { value: new THREE.Vector2() },
       uPointSize: { value: 1.5 },
       uBright: { value: 1 },
       uDensity: { value: null },
@@ -185,10 +194,20 @@ export class GpuRenderer implements PlateRenderer {
     this.cssH = Math.max(1, cssH);
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.gl.setPixelRatio(this.pixelRatio());
-    this.gl.setSize(this.cssW, this.cssH, false);
-    const { bx, by } = plateLayout(this.cssW, this.cssH);
+    this.gl.setSize(this.cssW, this.cssH + this.overhang, false);
+    const { side, bx, by } = plateLayout(this.cssW, this.cssH);
     this.bounds.set(bx, by);
+    this.floor.value = -by - (this.overhangSand ? (2 * this.overhang) / side : 0);
+    this.canvas.style.height = this.overhang ? `calc(100% + ${this.overhang}px)` : '';
     this.syncSizeUniforms(1);
+  }
+
+  setOverhang(px: number, sand = true) {
+    px = Math.max(0, Math.round(px));
+    if (px === this.overhang && sand === this.overhangSand) return;
+    this.overhang = px;
+    this.overhangSand = sand;
+    this.resize(this.cssW, this.cssH);
   }
 
   private syncSizeUniforms(exportScale: number) {
@@ -198,9 +217,13 @@ export class GpuRenderer implements PlateRenderer {
     this.gl.getDrawingBufferSize(this.bufSize);
     const bw = this.bufSize.x, bh = this.bufSize.y;
     (this.displayU.uRes.value as THREE.Vector2).set(bw, bh);
+    // the stage is the top cssH of the canvas; anything below overhangs it
+    const tall = this.cssH + this.overhang;
+    (this.displayU.uCentre.value as THREE.Vector2).set(bw / 2, (bh * (this.overhang + this.cssH / 2)) / tall);
     if (this.accumRT.width !== bw || this.accumRT.height !== bh) this.accumRT.setSize(bw, bh);
     this.displayU.uSide.value = side * pr;
-    (this.pointsU.uScale.value as THREE.Vector2).set(side / this.cssW, side / this.cssH);
+    (this.pointsU.uScale.value as THREE.Vector2).set(side / this.cssW, side / tall);
+    (this.pointsU.uOffset.value as THREE.Vector2).set(0, this.overhang / tall);
     // grains stay about one physical grain wide at any resolution
     this.pointsU.uPointSize.value = Math.max(1, pr * GRAIN_PX);
     this.brightBase = pr < 1 ? 0.85 : 1;
@@ -274,11 +297,11 @@ export class GpuRenderer implements PlateRenderer {
   private seed() {
     const size = this.texSize;
     const data = new Float32Array(size * size * 4);
-    const { x: bx, y: by } = this.bounds;
+    const { x: bx, y: by } = this.bounds, lo = this.floor.value;
     for (let i = 0; i < size * size; i++) {
       const dust = Math.random() < 0.06;
       data[i * 4] = (Math.random() * 2 - 1) * bx;
-      data[i * 4 + 1] = (Math.random() * 2 - 1) * by;
+      data[i * 4 + 1] = lo + Math.random() * (by - lo);
       data[i * 4 + 2] = dust ? 0.12 + Math.random() * 0.3 : 0.7 + Math.random() * 0.3; // mobility
       data[i * 4 + 3] = dust ? 0.2 + Math.random() * 0.3 : 0.35 + Math.random() * Math.random() * 0.65; // brightness
     }
@@ -317,6 +340,7 @@ export class GpuRenderer implements PlateRenderer {
   setTitle(mask: TitleMask | null) {
     this.titleTex.dispose();
     this.titleTex = mask ? this.redTexture(mask.data, mask.size) : this.redTexture(new Uint8Array(1), 1);
+    this.simU.uTitleHalf.value = mask ? mask.right : 1;
     this.simU.uTitle.value = this.titleTex;
     this.densityTex.dispose();
     this.densityTex = mask ? this.redTexture(mask.density, mask.densitySize) : this.redTexture(new Uint8Array(1), 1);
@@ -383,6 +407,8 @@ export class GpuRenderer implements PlateRenderer {
     u.uImpN.value = n;
     u.uTitleMix.value = inp.titleMix;
     u.uTitleGain.value = inp.titleGain;
+    u.uTitleShake.value = inp.titleShake;
+    u.uTitleHold.value = inp.titleHold;
     const target = this.posRT[this.ping];
     this.gl.setRenderTarget(target);
     this.gl.render(this.simScene, this.camera);
@@ -441,19 +467,19 @@ export class GpuRenderer implements PlateRenderer {
 
   async exportPNG(): Promise<Blob> {
     const caps = this.gl.capabilities;
-    const longest = Math.max(this.cssW, this.cssH) * this.pixelRatio();
+    const longest = Math.max(this.cssW, this.cssH + this.overhang) * this.pixelRatio();
     const limit = Math.min(caps.maxTextureSize, 6144);
     // at least twice the screen, or 4096 px on the long side, within GPU limits
     const scale = Math.max(1, Math.min(limit / longest, Math.max(2, 4096 / longest)));
     const base = this.pixelRatio();
     this.gl.setPixelRatio(base * scale);
-    this.gl.setSize(this.cssW, this.cssH, false);
+    this.gl.setSize(this.cssW, this.cssH + this.overhang, false);
     this.syncSizeUniforms(scale);
     this.composite();
     // read back synchronously, before the browser composites and clears the buffer
     const url = this.canvas.toDataURL('image/png');
     this.gl.setPixelRatio(base);
-    this.gl.setSize(this.cssW, this.cssH, false);
+    this.gl.setSize(this.cssW, this.cssH + this.overhang, false);
     this.syncSizeUniforms(1);
     const res = await fetch(url);
     return res.blob();

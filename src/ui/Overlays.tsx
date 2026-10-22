@@ -9,7 +9,6 @@ import { Button, IconButton, cx } from './primitives';
 /** the title the sand spells while the plate gets ready; it hands over by itself */
 export function Intro() {
   const phase = useUI((s) => (s.loading ? 'loading' : s.intro));
-  const gap = useUI((s) => s.titleBottom);
   const show = phase === 'forming' || phase === 'title';
   if (phase === 'done') return null;
   return (
@@ -20,7 +19,7 @@ export function Intro() {
           'absolute inset-x-0 flex justify-center px-4 transition-opacity duration-500',
           show ? 'opacity-100' : 'opacity-0'
         )}
-        style={{ top: `calc(50% - var(--dock-h, 0px) / 2 + ${gap}px + clamp(20px, 4vh, 44px))` }}
+        style={{ bottom: 'calc(env(safe-area-inset-bottom) + clamp(24px, 6vh, 56px))' }}
       >
         <p role="status" className="flex items-center gap-2.5 rounded-full bg-black/70 px-4 py-1.5 text-[15px] text-white backdrop-blur-sm sm:text-[16px]">
           <span aria-hidden className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/25 border-t-white" />
