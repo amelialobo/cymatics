@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Waveform } from '../audio/AudioEngine';
 import { DEFAULT_PARAMS, setParams, ui, useUI, writeFlag } from '../core/store';
-import { complexityMult, hzFromLam } from '../pattern/driver';
+import { complexityMult, hzFromLam, lamFromHz } from '../pattern/driver';
 import { ModeBank, SYMMETRIES, type Symmetry } from '../pattern/modes';
+import { getPlate, resonances } from '../pattern/plates';
 import { noteName, useAudio, useExperience } from './context';
 import { Button, Choice, Group, IconButton, Slider, Switch, cx } from './primitives';
 
@@ -151,12 +152,12 @@ const WAVES: { value: Waveform; label: string }[] = [
   { value: 'square', label: 'Hollow' },
   { value: 'sawtooth', label: 'Bright' },
 ];
-const RESONANT: [number, number][] = [[2, 1], [3, 1], [3, 2], [4, 2], [5, 3], [6, 2], [6, 4], [7, 4], [8, 3]];
 
 function ToneOptions() {
   const exp = useExperience();
   const { tone } = useAudio();
   const complexity = useUI((s) => s.params.complexity);
+  const symmetry = useUI((s) => s.params.symmetry);
   const res = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     exp?.bindResonance(res.current);
@@ -165,10 +166,10 @@ function ToneOptions() {
   if (!exp) return null;
   const a = exp.audio;
   const mult = complexityMult(complexity);
-  const notes = RESONANT.map(([n, m]) => {
-    const md = exp.bank.modes.find((x) => x.n === n && x.m === m)!;
-    return Math.round(hzFromLam(md.lam) / mult);
-  }).filter((hz) => hz >= 20 && hz <= 2000);
+  // the plate's own resonances, which depend on its shape and edges
+  const notes = resonances(getPlate(symmetry), lamFromHz(60) * mult, lamFromHz(1800) * mult, 9)
+    .map((lam) => Math.round(hzFromLam(lam) / mult))
+    .filter((hz, i, all) => all.indexOf(hz) === i);
 
   return (
     <Group title="Tone">
@@ -185,7 +186,7 @@ function ToneOptions() {
             </span>
           </span>
         </div>
-        <p className="text-[12.5px] leading-snug text-muted">These pitches make the plate ring clearly and form crisp shapes.</p>
+        <p className="text-[12.5px] leading-snug text-muted">These pitches land on this plate’s own resonances, so it rings clearly and forms crisp shapes.</p>
         <div className="flex flex-wrap gap-2">
           {notes.map((hz) => (
             <button
@@ -253,21 +254,22 @@ function ShapeThumb({ symmetry }: { symmetry: Symmetry }) {
     const c = ref.current!;
     const S = 64;
     c.width = c.height = S;
-    const bank = new ModeBank();
-    bank.excite(symmetry === 'radial' ? 13 : 25, 1);
-    bank.setRadial(symmetry === 'radial' ? 0.25 : 0.12, 3, 2.8);
+    const bank = new ModeBank(symmetry);
+    // the plate ringing at one of its own resonances near 550 Hz
+    const plate = getPlate(symmetry);
+    bank.excite(resonances(plate, lamFromHz(400), lamFromHz(750), 1)[0] ?? lamFromHz(550), 1);
     bank.snap();
     bank.pack();
-    for (let i = 0; i < 6; i++) bank.normalise(symmetry, 24);
+    for (let i = 0; i < 6; i++) bank.normalise(24);
     const ctx = c.getContext('2d')!;
     const img = ctx.createImageData(S, S);
     const h = 2 / S;
     for (let j = 0; j < S; j++) {
       for (let i = 0; i < S; i++) {
         const x = -1 + (2 * i + 1) / S, y = 1 - (2 * j + 1) / S;
-        const f = bank.evalRaw(symmetry, x, y) * bank.norm;
-        const gx = (bank.evalRaw(symmetry, x + h, y) - bank.evalRaw(symmetry, x - h, y)) * bank.norm / (2 * h);
-        const gy = (bank.evalRaw(symmetry, x, y + h) - bank.evalRaw(symmetry, x, y - h)) * bank.norm / (2 * h);
+        const f = bank.evalRaw(x, y) * bank.norm;
+        const gx = (bank.evalRaw(x + h, y) - bank.evalRaw(x - h, y)) * bank.norm / (2 * h);
+        const gy = (bank.evalRaw(x, y + h) - bank.evalRaw(x, y - h)) * bank.norm / (2 * h);
         const d = Math.abs(f) / Math.max(Math.hypot(gx, gy), 1e-3);
         const v = Math.exp(-Math.pow(d / (h * 0.55), 2)) * 235;
         const o = (j * S + i) * 4;

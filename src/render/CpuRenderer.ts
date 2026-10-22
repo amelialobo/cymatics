@@ -2,7 +2,7 @@
  * Fallback for browsers without WebGL2 float render targets: the same field
  * and sand physics on the CPU, drawn to a 2D canvas. Fewer grains, same look.
  */
-import { TUNE, plateLayout, type FrameInput, type PlateRenderer } from './types';
+import { NO_DRIFT, TUNE, plateLayout, type FrameInput, type PlateRenderer } from './types';
 import { sampleTitle, type TitleMask } from './title';
 
 const N = 150; // field grid resolution
@@ -87,7 +87,7 @@ export class CpuRenderer implements PlateRenderer {
   }
 
   setParticleBudget(n: number) {
-    n = Math.max(8000, Math.min(90000, Math.round(n * 0.5)));
+    n = Math.max(8000, Math.min(450000, Math.round(n * 0.5)));
     const old = this.count;
     const px = new Float32Array(n), py = new Float32Array(n), pm = new Float32Array(n), pb = new Uint8Array(n);
     const keep = Math.min(old, n);
@@ -135,13 +135,13 @@ export class CpuRenderer implements PlateRenderer {
   }
 
   private computeField(inp: FrameInput) {
-    const { bank, symmetry } = inp;
+    const { bank } = inp;
     const G = this.G, norm = bank.norm;
     for (let j = 0; j < N; j++) {
       const y = -1 + (2 * j) / (N - 1);
       for (let i = 0; i < N; i++) {
         const x = -1 + (2 * i) / (N - 1);
-        G[j * N + i] = bank.evalRaw(symmetry, x, y) * norm;
+        G[j * N + i] = bank.evalRaw(x, y) * norm;
       }
     }
   }
@@ -153,7 +153,10 @@ export class CpuRenderer implements PlateRenderer {
     const { px, py, pm, count, bx, by, floor } = this;
     const jitA = V * TUNE.jitter * f60;
     const jit0 = V * TUNE.diffuse * f60 * (1 - 0.45 * inp.stability);
-    const pull = Math.min(0.6, V * TUNE.pull * inp.response * f60);
+    const pull0 = Math.min(0.6, Math.sqrt(V) * TUNE.pull * inp.response * f60);
+    // while the title merges, each grain covers an even share of the way per
+    // step, timed to arrive with its part of the word: the middle a little later
+    const drifting = inp.driftLeft !== NO_DRIFT, dHalf = this.title?.right ?? 1;
     const maxStep = TUNE.maxStep * f60, ms2 = maxStep * maxStep;
     const kk = inp.kick * TUNE.kick * f60;
     const imps = inp.impulses;
@@ -165,7 +168,10 @@ export class CpuRenderer implements PlateRenderer {
     const L = stamp?.size ?? 1;
     for (let k = 0; k < count; k++) {
       let x = px[k], y = py[k];
-      const gx = (x + 1) * half, gy = (y + 1) * half;
+      // below the plate (the strip under the dock during the intro) the figure
+      // carries on as its mirror image, which meets the plate's edge seamlessly
+      const below = y < -1;
+      const gx = (x + 1) * half, gy = ((below ? -2 - y : y) + 1) * half;
       let i = gx | 0, j = gy | 0;
       if (i < 0) i = 0; else if (i > n2) i = n2;
       if (j < 0) j = 0; else if (j > n2) j = n2;
@@ -174,7 +180,7 @@ export class CpuRenderer implements PlateRenderer {
       const a0 = g00 + (g10 - g00) * fx, a1 = g01 + (g11 - g01) * fx;
       let f = a0 + (a1 - a0) * fy;
       let dx = ((g10 - g00) * (1 - fy) + (g11 - g01) * fy) * half;
-      let dy = (a1 - a0) * half;
+      let dy = (a1 - a0) * half * (below ? -1 : 1);
       if (title) {
         sampleTitle(title, x, y, ts);
         const e = Math.min(1, Math.abs(x) / tHalf), tm = tm0 + (tmHold - tm0) * (1 - e * e * (3 - 2 * e));
@@ -189,6 +195,11 @@ export class CpuRenderer implements PlateRenderer {
         const ex = x - im.x, ey = y - im.y, d2 = ex * ex + ey * ey;
         if (d2 < im.r * im.r) amp += im.s * f60 * (1 - Math.sqrt(d2) / im.r);
       }
+      let pull = pull0;
+      if (drifting) {
+        const e = Math.min(1, Math.abs(x) / dHalf), mid = 1 - e * e * (3 - 2 * e);
+        pull = Math.min(0.6, f60 / Math.max(1, (inp.driftLeft + inp.driftLag * mid) * 60));
+      }
       const pk = (pull * pm[k] * f) / (dx * dx + dy * dy + 1e-4);
       let sx = -dx * pk, sy = -dy * pk;
       const sl = sx * sx + sy * sy;
@@ -201,16 +212,27 @@ export class CpuRenderer implements PlateRenderer {
       y += sy + (rnd() - 0.5) * amp;
       const lifted = stamp !== null && rnd() < inp.titleGain &&
         stamp.data[Math.min(L - 1, Math.max(0, ((y + 1) * 0.5 * L) | 0)) * L + Math.min(L - 1, Math.max(0, ((x + 1) * 0.5 * L) | 0))] > 127;
-      if (lifted || x < -bx || x > bx || y < floor || y > by) {
+      const off = x < -bx || x > bx || y < floor || y > by;
+      if (lifted || (off && inp.rehome >= 1)) {
         x = (rnd() * 2 - 1) * bx;
         y = floor + rnd() * (by - floor);
+      } else if (off) {
+        // unhurried: wait where it is, then land beside a grain on the plate
+        if (rnd() < inp.rehome) {
+          const src = (rnd() * count) | 0;
+          x = px[src] + (rnd() - 0.5) * 0.004;
+          y = py[src] + (rnd() - 0.5) * 0.004;
+        } else {
+          x = px[k];
+          y = py[k];
+        }
       }
       px[k] = x;
       py[k] = y;
     }
   }
 
-  private draw(colors: Float32Array, titleMix: number, titleGain: number) {
+  private draw(colors: Float32Array, titleMix: number, titleGain: number, titleHold: number) {
     const buf = this.buf!, acc = this.acc, W = this.W, H = this.H, S = this.S;
     const br = colors[0] * 255, bgG = colors[1] * 255, bb = colors[2] * 255;
     const sr = colors[3] * 255 - br, sg = colors[4] * 255 - bgG, sb = colors[5] * 255 - bb;
@@ -219,18 +241,21 @@ export class CpuRenderer implements PlateRenderer {
     const cx = W * 0.5, cy = this.cy;
     const { px, py, pb, count } = this;
     // opening title: a scattered handful rather than an even layer
-    const tm = this.title ? titleMix : 0, dens = this.title?.density, D = this.title?.densitySize ?? 1;
-    const letters = this.title?.data, L = this.title?.size ?? 1, bare = tm * titleGain;
+    const tm0 = this.title ? titleMix : 0, dens = this.title?.density, D = this.title?.densitySize ?? 1;
+    // the word lets go at its ends first, its middle a little later
+    const tmHold = this.title ? Math.max(tm0, titleHold) : 0, tHalf = this.title?.right ?? 1;
+    const letters = this.title?.data, L = this.title?.size ?? 1;
     for (let k = 0; k < count; k++) {
       const sx = (cx + px[k] * S) | 0, sy = (cy - py[k] * S) | 0;
       if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+      const e = Math.min(1, Math.abs(px[k]) / tHalf), tm = tm0 + (tmHold - tm0) * (1 - e * e * (3 - 2 * e));
       if (tm > 0 && dens) {
         const di = Math.min(D - 1, ((px[k] + 1) * 0.5 * D) | 0), dj = Math.min(D - 1, ((py[k] + 1) * 0.5 * D) | 0);
         const h = (Math.imul(k, 2654435761) >>> 0) / 4294967296;
         if (h > 1 + (dens[dj * D + di] / 255 - 1) * tm) continue;
         // and none inside the letters
         const li = Math.min(L - 1, ((px[k] + 1) * 0.5 * L) | 0), lj = Math.min(L - 1, ((py[k] + 1) * 0.5 * L) | 0);
-        if (letters![lj * L + li] > 127 && ((Math.imul(k, 1597334677) >>> 0) / 4294967296) < bare) continue;
+        if (letters![lj * L + li] > 127 && ((Math.imul(k, 1597334677) >>> 0) / 4294967296) < tm * titleGain) continue;
       }
       const idx = sy * W + sx;
       const a = (acc[idx] += pb[k] / 255);
@@ -244,13 +269,13 @@ export class CpuRenderer implements PlateRenderer {
   frame(inp: FrameInput) {
     this.computeField(inp);
     if (!inp.paused) this.step(inp);
-    this.draw(inp.colors, inp.titleMix, inp.titleGain);
+    this.draw(inp.colors, inp.titleMix, inp.titleGain, inp.titleHold);
   }
 
   presettle(inp: FrameInput, steps: number) {
     this.computeField(inp);
     for (let i = 0; i < steps; i++) this.step(inp);
-    this.draw(inp.colors, inp.titleMix, inp.titleGain);
+    this.draw(inp.colors, inp.titleMix, inp.titleGain, inp.titleHold);
   }
 
   exportPNG(): Promise<Blob> {

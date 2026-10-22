@@ -21,6 +21,11 @@ body,
   background: #000;
 }
 
+html {
+  /* no elastic overscroll revealing the page behind the dock */
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   overflow: hidden;

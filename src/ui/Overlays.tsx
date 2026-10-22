@@ -9,7 +9,8 @@ import { Button, IconButton, cx } from './primitives';
 /** the title the sand spells while the plate gets ready; it hands over by itself */
 export function Intro() {
   const phase = useUI((s) => (s.loading ? 'loading' : s.intro));
-  const show = phase === 'forming' || phase === 'title';
+  // the message is up from the start, and stays while the word disperses
+  const show = phase !== 'done';
   if (phase === 'done') return null;
   return (
     <div className="pointer-events-none fixed inset-0 z-30">
@@ -222,20 +223,6 @@ export function Details() {
 }
 
 // -------------------------------------------------------------- others
-/** a black cover until the first frame is drawn; the intro carries the loading message */
-export function Loader() {
-  const loading = useUI((s) => s.loading);
-  return (
-    <div
-      aria-hidden
-      className={cx(
-        'fixed inset-0 z-50 bg-black transition-opacity duration-700',
-        loading ? 'opacity-100' : 'pointer-events-none opacity-0'
-      )}
-    />
-  );
-}
-
 export function Toast() {
   const msg = useUI((s) => s.toast);
   return (
@@ -291,8 +278,8 @@ export function FileInput() {
 
 /** the screw that drives the plate, as in the photographs */
 export function Bolt() {
-  // hidden while the title sits where it would be
-  const hidden = useUI((s) => s.intro === 'forming' || s.intro === 'title');
+  // hidden until the title, which sits where it would be, has dispersed
+  const hidden = useUI((s) => s.intro !== 'done');
   return (
     <div
       aria-hidden

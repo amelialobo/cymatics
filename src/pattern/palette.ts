@@ -29,6 +29,7 @@ const pal = (name: string, background: string, sand: string): Palette => ({ name
  * Sand-to-background contrast noted.
  */
 export const PALETTES: Palette[] = [
+  pal('Black & white', '#000000', '#FFFFFF'), // dark, 21 : 1 (the plate opens on this)
   pal('Midnight & Coral', '#14213D', '#FF8C69'), // dark, 7.0 : 1
   pal('Teal & Sand', '#0F4C5C', '#F6D8AE'), // dark, 7.0 : 1
   pal('Forest & Lime', '#12372A', '#D4F27A'), // dark, 10.5 : 1
@@ -37,6 +38,7 @@ export const PALETTES: Palette[] = [
   pal('Blush & Burgundy', '#FFC2D1', '#4A0E1F'), // light, 10.1 : 1
   pal('Peach & Plum', '#FFD3B6', '#4A1942'), // light, 10.1 : 1
   pal('Butter & Cobalt', '#FFE7A3', '#1E3A8A'), // light, 8.5 : 1
+  pal('Neon & Black', '#39FF14', '#0A0A0A'), // light, 14.6 : 1
   pal('Mint & Forest', '#CDEFD9', '#0E3B2E'), // light, 10.1 : 1
   pal('Sky & Navy', '#CFE8FF', '#0B2545'), // light, 12.2 : 1
   pal('Lilac & Aubergine', '#E4D7FF', '#2E1244'), // light, 12.0 : 1
@@ -85,7 +87,6 @@ const MIN_GAP = 0.52;
 
 /** quick pairs offered in the colour picker, besides the changing palettes */
 export const FIXED_PAIRS: Palette[] = [
-  pal('Black & white', '#000000', '#FFFFFF'),
   pal('White & black', '#FFFFFF', '#111111'),
   ...PALETTES,
 ];
@@ -163,6 +164,9 @@ type Part = 'background' | 'sand';
 export class ColorDrift {
   /** fractional position along PALETTES */
   pos = 2;
+  /** pairing the resting plate is fading toward; null follows the sound */
+  private idleTarget: number | null = null;
+  private idleDir = 1;
   /** background rgb, sand rgb (sRGB 0..1), ready for the shader */
   readonly rgb = new Float32Array(6);
   /** colours the person picked (OKLab), or null while that part keeps changing */
@@ -184,9 +188,9 @@ export class ColorDrift {
     }
   }
 
-  /** jump straight to the colours (no fade), e.g. on load */
-  snap(meanLambda: number) {
-    this.pos = this.fromFigure(meanLambda);
+  /** jump straight to the colours (no fade): a pairing's index, or the figure's on load */
+  snap(meanLambda: number, index?: number) {
+    this.pos = index ?? this.fromFigure(meanLambda);
     this.weight.background = this.fixed.background ? 1 : 0;
     this.weight.sand = this.fixed.sand ? 1 : 0;
     this.compute();
@@ -217,7 +221,27 @@ export class ColorDrift {
    * @param pitchHz the dominant frequency while sound is playing; null when silent,
    *   which keeps the current colours (they only change with sound)
    */
+  /** while the plate rests: the next pairing along, bouncing at the ends */
+  advance() {
+    const last = PALETTES.length - 1;
+    let next = Math.round(this.idleTarget ?? this.pos) + this.idleDir;
+    if (next < 0 || next > last) {
+      this.idleDir = -this.idleDir;
+      next += 2 * this.idleDir;
+    }
+    this.idleTarget = next;
+  }
+
+  /** a stopped tone's new pitch: head for its colours, then carry on resting from there */
+  aimAt(hz: number) {
+    this.idleTarget = this.fromPitch(hz);
+  }
+
   update(dt: number, pitchHz: number | null, reducedMotion: boolean) {
+    if (pitchHz) this.idleTarget = null;
+    else if (this.idleTarget !== null) {
+      this.pos += (this.idleTarget - this.pos) * (1 - Math.exp(-dt * 1.1 * (reducedMotion ? 0.35 : 1)));
+    }
     if (pitchHz) {
       const target = this.fromPitch(pitchHz);
       // following a pitch takes about a second

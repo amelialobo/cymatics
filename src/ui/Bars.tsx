@@ -47,6 +47,8 @@ const SOURCES: { id: SourceKind; label: string; short: string; icon: IconName }[
 export function Dock() {
   const tab = useUI((s) => s.tab);
   const panelOpen = useUI((s) => s.panelOpen);
+  // slides up once the title has dispersed into the plate
+  const away = useUI((s) => s.intro !== 'done');
   const { source } = useAudio();
   const ref = useRef<HTMLElement>(null);
 
@@ -61,7 +63,10 @@ export function Dock() {
   return (
     <footer
       ref={ref}
-      className="fixed inset-x-0 bottom-0 z-20 border-t border-line/70 bg-ink"
+      className={cx(
+        'fixed inset-x-0 bottom-0 z-20 border-t border-line/70 bg-ink transition-transform duration-1000 ease-out-quint',
+        away ? 'translate-y-full' : 'translate-y-0'
+      )}
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       <div className="mx-auto flex max-w-6xl flex-col-reverse gap-2 px-3 py-3 md:flex-row md:items-center md:gap-5 md:px-5">

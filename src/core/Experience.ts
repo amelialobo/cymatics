@@ -9,7 +9,7 @@ import { ColorDrift } from '../pattern/palette';
 import { PatternDriver } from '../pattern/driver';
 import { CpuRenderer } from '../render/CpuRenderer';
 import { GpuRenderer, gpuSupported } from '../render/GpuRenderer';
-import { clientToPlate, desiredParticles, plateLayout, type FrameInput, type Impulse, type PlateRenderer } from '../render/types';
+import { NO_DRIFT, clientToPlate, desiredParticles, plateLayout, type FrameInput, type Impulse, type PlateRenderer } from '../render/types';
 import { buildTitleMask, loadTitleFont, type TitleMask } from '../render/title';
 import { saveFrame } from '../export/snapshot';
 import { DEFAULT_PARAMS, toast, ui } from './store';
@@ -29,6 +29,9 @@ function introSand(w: number, h: number, density: number, coarse: boolean) {
   const base = coarse ? Math.max(w * h * 0.3, Math.min(w, h) * 1000) : w * h * 0.6;
   return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 589824 : 1048576));
 }
+/** seconds the title takes to merge into the plate's figure, and how much longer its middle lingers */
+const MERGE_S = 7;
+const MERGE_LAG_S = 3;
 /** seconds to pour in the rest of the sand once the plate has taken over */
 const SAND_POUR = 3;
 
@@ -69,27 +72,35 @@ export class Experience {
   private sweepDir = 1;
   private readonly reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   private readonly coarse = matchMedia('(pointer: coarse)').matches;
-  /** opening title: 'title' while the sand spells it, 'release' while it lets go */
   /** 0 while the intro holds the sand down to its light layer, 1 once it is all poured in */
   private sandK = 0;
   private sandT = 0;
-  /** the canvas stops overhanging the dock at the start of the next frame */
-  private dropOverhang = false;
+  /** seconds since the title finished merging, while stray grains settle */
+  private settleT = 0;
+  /** whether the canvas has drawn its first frame and is showing */
+  private drawn = false;
+  /** seconds until the canvas stops overhanging the dock (once it has slid up), or -1 */
+  private dropOverhangIn = -1;
+  /** opening title: 'title' while the sand spells it, 'release' while it disperses */
   private intro = { phase: 'title' as 'title' | 'release' | 'off', t: -0.6, mix: 1, hold: 1, mask: null as TitleMask | null };
-  /** white sand on black while the title shows, easing into the plate's own colours */
-  private readonly introRgb = new Float32Array([0, 0, 0, 1, 1, 1]);
   private ro: ResizeObserver;
   private unsub: () => void;
   private input: FrameInput;
+  /** seconds the plate has rested since its colours last moved on */
+  private idleColourT = 0;
+  /** the stopped tone's pitch last given to the colours */
+  private silentToneHz = NaN;
 
   constructor(private container: HTMLElement) {
     this.driver = new PatternDriver(this.bank, this.reduced);
     this.renderer = this.createRenderer();
+    // a new canvas is black until it is drawn: keep it out of sight till then
+    if (this.renderer) this.renderer.canvas.style.opacity = '0';
     const p = ui.get().params;
     this.input = {
       dt: 1 / 60, bank: this.bank, symmetry: p.symmetry, V: 0, kick: 0,
       stability: 0, response: p.response, impulses: this.impulses, paused: false,
-      colors: this.introRgb, titleMix: 1, titleGain: 1, titleShake: 0, titleHold: 1,
+      colors: this.color.rgb, titleMix: 1, titleGain: 1, titleShake: 0, titleHold: 1, rehome: 1, driftLeft: NO_DRIFT, driftLag: MERGE_LAG_S,
     };
 
     this.ro = new ResizeObserver(() => this.resize());
@@ -136,7 +147,7 @@ export class Experience {
     }
   }
 
-  /** prepare the plate behind the loading screen; the sand starts as an even layer for the title */
+  /** prepare the plate; until its first frame, the page shows the plate's own colour, not black */
   private async boot() {
     const r = this.renderer;
     if (!r) {
@@ -145,25 +156,40 @@ export class Experience {
       return;
     }
     const p = ui.get().params;
-    this.driver.update(1 / 60, performance.now() / 1000, this.audio.features, p, null);
+    this.bank.setPlate(p.symmetry);
+    this.driver.update(1 / 60, performance.now() / 1000, this.audio.features, p, null, this.audio.state.tone);
     this.bank.snap();
     this.bank.pack();
-    for (let i = 0; i < 8; i++) this.bank.normalise(p.symmetry);
+    for (let i = 0; i < 8; i++) this.bank.normalise();
     this.color.setFixed(p.bgColor, p.sandColor);
-    this.color.snap(this.bank.meanLambda());
+    // the plate opens in black and white, then moves on through the colours
+    this.color.snap(this.bank.meanLambda(), 0);
+    this.paintBackdrop();
 
     await loadTitleFont();
     if (!this.renderer) return; // disposed while the font loaded
     this.buildTitle();
     if (this.reduced) {
       // no landing: the word is simply there
-      this.intro.t = 2.4;
+      this.intro.t = 0.5;
       this.presettleTitle();
     }
     this.driver.V = 0.4;
     this.last = performance.now();
     this.raf = requestAnimationFrame(this.frame);
     window.setTimeout(() => ui.set({ loading: false }), 350);
+  }
+
+  /**
+   * the app's own backdrop takes the plate's colour while the plate gets ready
+   * (not the page's: browsers tint their own chrome with that)
+   */
+  private paintBackdrop(on = true) {
+    const c = this.color.rgb;
+    const css = on ? `rgb(${Math.round(c[0] * 255)} ${Math.round(c[1] * 255)} ${Math.round(c[2] * 255)})` : '';
+    for (const el of [document.getElementById('root'), this.container]) {
+      if (el) el.style.backgroundColor = css;
+    }
   }
 
   /** reduced motion: the sand is already settled around the word */
@@ -214,9 +240,9 @@ export class Experience {
   }
 
   /**
-   * Sand is sprinkled over the plate with the word already pressed into it:
-   * the layer bounces as it lands and settles around the bare letters. It
-   * holds for a moment, then releases by itself.
+   * Sand is sprinkled over the plate, in its own colours, with the word
+   * already pressed into it. Almost at once it starts to merge into the
+   * plate's figure, slowly, while the plate gets ready, until it is all sand.
    */
   private stepIntro(dt: number) {
     const it = this.intro, inp = this.input;
@@ -231,26 +257,36 @@ export class Experience {
       inp.kick = 0.35 * ring;
       inp.stability = 0.6;
       if (it.t >= 2.4 && ui.get().intro === 'forming') ui.set({ intro: 'title' });
-      // hold the word a moment, then let the plate take over on its own
-      if (it.t > 3.8) this.begin();
+      // a moment to read the word, then it starts merging into the figure
+      if (it.t > 0.5) this.begin();
     } else {
-      it.mix = Math.max(0, 1 - it.t / 1.3);
-      // the middle of the word stays on the plate a second longer
-      it.hold = Math.min(1, Math.max(0, 1 - (it.t - 1) / 1.3));
+      // the word merges very slowly; its middle stays on the plate a little longer
+      it.mix = Math.max(0, 1 - it.t / MERGE_S);
+      it.hold = Math.min(1, Math.max(0, 1 - (it.t - MERGE_LAG_S) / MERGE_S));
+      // and each grain drifts toward the figure at its own even speed, timed to
+      // arrive as the merge ends there: the middle, like the word, a little later
+      const k = Math.min(1, it.t / (MERGE_S + MERGE_LAG_S)), ease = k * k * (3 - 2 * k);
+      inp.V *= 0.15 + 0.85 * ease;
+      inp.kick *= ease;
+      inp.driftLeft = MERGE_S - it.t;
       if (it.hold === 0) {
         it.phase = 'off';
         it.mask = null;
         this.renderer?.setTitle(null);
-        inp.colors = this.color.rgb;
+        // the plate is ready: the controls slide up, and once they cover the
+        // strip the canvas stops overhanging it
+        ui.set({ intro: 'done' });
+        this.dropOverhangIn = 1.1;
+        this.paintBackdrop(false);
       }
     }
     inp.titleMix = it.mix;
     inp.titleShake = it.phase === 'release' ? 1 : 0;
+    // while the word merges, the sand under the dock drains onto the plate
+    // gently, and just after, grains held at the edges land beside the figure
+    inp.rehome = it.phase === 'release' ? 0.006 : it.phase === 'off' ? 0.05 : 1;
+    if (it.phase !== 'release') inp.driftLeft = NO_DRIFT;
     inp.titleHold = it.phase === 'off' ? 0 : it.hold;
-    if (it.phase !== 'off') {
-      const pal = this.color.rgb, w = it.mix, rgb = this.introRgb;
-      for (let i = 0; i < 6; i++) rgb[i] = pal[i] + ((i < 3 ? 0 : 1) - pal[i]) * w;
-    }
   }
 
   /** the plate takes over from the title and the sand runs to its lines */
@@ -259,18 +295,7 @@ export class Experience {
     if (it.phase !== 'title') return;
     it.phase = 'release';
     it.t = 0;
-    // the grains below the plate are thrown back onto it; the canvas stays
-    // under the dock while it fades in, so no bare strip shows
-    this.renderer?.setOverhang(dockHeight(), false);
-    this.driver.V = Math.max(this.driver.V, 0.75);
-    this.driver.kick = Math.max(this.driver.kick, 0.45);
     ui.set({ intro: 'leaving' });
-    // let the figure form before anything covers it
-    window.setTimeout(() => {
-      ui.set({ intro: 'done' });
-      // resizing the canvas clears it: do it in the next frame, which redraws at once
-      this.dropOverhang = true;
-    }, 2600);
   }
 
   // ---------------------------------------------------------------- loop
@@ -285,15 +310,33 @@ export class Experience {
 
     const F = this.audio.analyze(dt);
     if (state.sweep) this.sweep(dt);
+    // each style is its own plate; the same drive shakes it into its own figure
+    this.bank.setPlate(p.symmetry);
     if (!p.paused) {
-      this.driver.update(dt, t, F, p, this.audio.state.source);
+      this.driver.update(dt, t, F, p, this.audio.state.source, this.audio.state.tone, state.tab === 'tone');
       this.bank.update(dt, p.response * (this.reduced ? 0.6 : 1));
     }
     this.bank.pack();
-    this.bank.normalise(p.symmetry);
+    this.bank.normalise();
     // the colours follow the pitch, and hold still in silence
     const sounding = F.active && F.level > 0.02 && F.dominantHz > 20;
     this.color.setFixed(p.bgColor, p.sandColor);
+    // a stopped tone's slider picks the colours, then they rest like the plate does
+    const toneHz = this.audio.state.tone.freq;
+    if (this.driver.silentTone && toneHz !== this.silentToneHz) {
+      this.color.aimAt(toneHz);
+      this.idleColourT = 0;
+    }
+    this.silentToneHz = this.driver.silentTone ? toneHz : NaN;
+    // a resting plate keeps one figure, but moves on to new colours every 3 s
+    if ((this.driver.idle || this.driver.silentTone) && !p.paused) {
+      this.idleColourT += dt;
+      if (this.idleColourT >= 3) {
+        this.idleColourT = 0;
+        this.color.advance();
+      }
+    } else this.idleColourT = 0;
+    // the colours flow from the start, through the intro and on into the plate
     this.color.update(dt, sounding ? F.dominantHz : null, this.reduced);
 
     this.impulses.length = 0;
@@ -308,12 +351,17 @@ export class Experience {
     inp.paused = p.paused;
     this.stepIntro(dt);
     this.pourSand(dt);
-    if (this.dropOverhang) {
-      this.dropOverhang = false;
-      this.renderer?.setOverhang(0);
-    }
+    // a few seconds after the merge, sand off the edge is sprinkled back as usual
+    if (this.intro.phase === 'off' && this.input.rehome < 1 && (this.settleT += dt) > 3) this.input.rehome = 1;
+    // resizing the canvas clears it, so it happens here, in a frame that redraws at once
+    if (this.dropOverhangIn >= 0 && (this.dropOverhangIn -= dt) < 0) this.renderer?.setOverhang(0);
     const w0 = performance.now();
     this.renderer?.frame(inp);
+    if (!this.drawn && this.renderer) {
+      // the first frame is down: let the sand appear over the plate's colour
+      this.drawn = true;
+      Object.assign(this.renderer.canvas.style, { transition: 'opacity 0.15s ease-out', opacity: '1' });
+    }
     const work = performance.now() - w0;
 
     this.trackPerformance(rawMs, work, t);
@@ -391,7 +439,7 @@ export class Experience {
     if (rms) rms.textContent = F.active && F.rms > 0.0003 ? `${Math.round(Math.min(1, F.rms * 2.5) * 100)}%  (${(20 * Math.log10(F.rms)).toFixed(0)} dB)` : '—';
     const m = this.bank.dominant();
     const fam = SYMMETRIES.find((s) => s.id === p.symmetry)?.label ?? '';
-    if (mode) mode.textContent = m ? `${fam} ${m.n}·${m.m}` : '—';
+    if (mode) mode.textContent = m ? `${fam} ${m.label}` : '—';
     if (complexity) {
       const lam = this.bank.meanLambda();
       const pct = lam > 0 ? Math.min(100, Math.round((Math.log(lam) / Math.log(400)) * 100)) : 0;
@@ -441,7 +489,7 @@ export class Experience {
     if (!this.renderer) return;
     try {
       const m = this.bank.dominant();
-      await saveFrame(this.renderer, m ? `${m.n}-${m.m}` : 'plate');
+      await saveFrame(this.renderer, m ? m.label.replace(/[^a-z0-9]+/gi, '-') : 'plate');
       toast('Image saved to your downloads.');
     } catch (err) {
       toast('Could not save the image: ' + (err as Error).message);
@@ -450,6 +498,7 @@ export class Experience {
 
   dispose() {
     cancelAnimationFrame(this.raf);
+    this.paintBackdrop(false);
     this.ro.disconnect();
     this.unsub();
     this.container.removeEventListener('pointerdown', this.onDown);

@@ -78,6 +78,8 @@ export class AudioEngine {
   private micGain: GainNode | null = null;
   private micGainValue = 2;
   private micSilentFor = 0;
+  /** bumped by every start and stop: a permission answer that arrives late is dropped */
+  private micRequest = 0;
 
   private hold = { band: 0.05, rms: 0.05, fluxAvg: 0 };
   private lastOnset = 0;
@@ -294,26 +296,57 @@ export class AudioEngine {
       this.emit({ mic: { status: 'unavailable', message: 'Microphone access needs a secure page (https or localhost).' } });
       return;
     }
-    const ctx = this.init();
-    this.emit({ mic: { status: 'requesting', message: 'Waiting for permission…' } });
+    if (this.state.mic.status === 'requesting') return;
+    let ctx: AudioContext;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      ctx = this.init();
+    } catch (err) {
+      this.emit({ mic: { status: 'unavailable', message: (err as Error).message } });
+      return;
+    }
+    // a second start replaces the running stream rather than mixing two
+    this.stopMic();
+    const request = ++this.micRequest;
+    this.emit({ mic: { status: 'requesting', message: 'Waiting for permission…' } });
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        // matching the context's rate spares Firefox a resample it refuses to do
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: { ideal: ctx.sampleRate } },
       });
+      // the user moved on (stopped, or chose the tone or a song) while the prompt was open
+      if (request !== this.micRequest) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      const track = stream.getAudioTracks()[0];
+      if (!track) throw new DOMException('The stream has no audio track.', 'NotFoundError');
+      const node = ctx.createMediaStreamSource(stream);
       this.stopAll('live');
       this.micStream = stream;
-      this.micNode = ctx.createMediaStreamSource(stream);
+      this.micNode = node;
       this.micGain = ctx.createGain();
       this.micGain.gain.value = this.micGainValue;
       this.micNode.connect(this.micGain);
       this.micGain.connect(this.input); // never to the speakers: no feedback
-      stream.getAudioTracks()[0]?.addEventListener('ended', () => this.stopMic());
+      // unplugged, switched away, or permission revoked: say so instead of quietly going off
+      track.addEventListener('ended', () => {
+        if (this.micStream !== stream) return;
+        this.stopMic();
+        this.emit({ mic: { status: 'unavailable', message: 'The microphone was disconnected. Start listening again to use the current input.' } });
+      });
       this.micSilentFor = 0;
       if (ctx.state !== 'running') await ctx.resume().catch(() => {});
       this.emit({ source: 'live', mic: { status: 'on', message: 'Listening. Nothing is recorded or sent.' } });
     } catch (err) {
+      // never leave the browser's recording indicator on for a stream we don't use
+      stream?.getTracks().forEach((t) => t.stop());
+      if (request !== this.micRequest) return;
+      this.micRequest++;
       const name = (err as DOMException)?.name;
-      if (name === 'NotAllowedError' || name === 'SecurityError') {
+      if (name === 'NotSupportedError') {
+        this.emit({ mic: { status: 'unavailable', message: 'This browser can’t read the microphone at its sample rate. Try Chrome or Safari, or reload the page.' } });
+      } else if (name === 'NotAllowedError' || name === 'SecurityError') {
         this.emit({ mic: { status: 'denied', message: 'Permission declined. Allow microphone access in the browser’s site settings, then try again.' } });
       } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
         this.emit({ mic: { status: 'unavailable', message: 'No microphone was found.' } });
@@ -326,6 +359,12 @@ export class AudioEngine {
   }
 
   stopMic() {
+    if (this.state.mic.status === 'requesting') {
+      // cancel the pending prompt's outcome; the stream is stopped when it arrives
+      this.micRequest++;
+      this.emit({ mic: { status: 'off', message: '' } });
+      return;
+    }
     if (!this.micStream) return;
     this.micStream.getTracks().forEach((t) => t.stop());
     this.micNode?.disconnect();

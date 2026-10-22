@@ -2,12 +2,13 @@
  * Shader rendering. Plate coordinates are (x, y) ∈ [-1, 1]², y up.
  *
  * Passes per frame:
- *  1. fieldFrag    standing-wave field → half-float texture (normalised to -1..1)
+ *  1. fieldFrag    the plate's mode sum → half-float texture (normalised to -1..1)
  *  2. simFrag      sand simulation: ping-pong float texture of grain positions
  *  3. pointsVert   grains accumulated as additive points into a coverage buffer
  *  4. displayFrag  colour: gradient background, faint nodal-intensity lines, sand on top
  */
 import { MAX_ACTIVE } from '../pattern/modes';
+import { DISC_R, TABLE_W } from '../pattern/plates';
 
 export const quadVert = /* glsl */ `
 varying vec2 vUv;
@@ -20,10 +21,14 @@ export const fieldFrag = /* glsl */ `
 precision highp float;
 #define MAXM ${MAX_ACTIVE}
 #define PI 3.141592653589793
+#define DISC_R ${DISC_R.toFixed(6)}
+#define TABLE_W ${TABLE_W.toFixed(1)}
 varying vec2 vUv;
 uniform vec4 uModes[MAXM];   // n, m, s, weight
 uniform int uCount;
-uniform int uSym;            // 0 free plate, 1 mirror, 2 clamped, 3 radial
+uniform int uSym;            // 0 free steel, 1 wood, 2 pinned edges, 3 round
+uniform sampler2D uTable;    // round plate: one radial profile per row
+uniform float uTableRows;
 uniform vec4 uRadial;        // weight, ring frequency k, superellipse exponent p
 uniform vec4 uNoise[8];      // ax, ay, phase, amplitude
 uniform float uNoiseAmt;
@@ -35,6 +40,13 @@ float superR(vec2 p, float e) {
   return pow(a.x + a.y, 1.0 / e);
 }
 
+// free-free beam with j nodes (see beam() in plates.ts)
+float beam(float j, float x) {
+  if (j < 0.5) return 1.0;
+  float k = j < 2.5 ? 2.365020372 : (j - 0.5) * PI * 0.5;
+  return cos(k * x) + cos(k) * (exp(k * (x - 1.0)) + exp(-k * (x + 1.0))) / (1.0 + exp(-2.0 * k));
+}
+
 void main() {
   vec2 p0 = vUv * 2.0 - 1.0;
   // a hair of warp: the plate is real metal, not a perfect equation
@@ -44,6 +56,7 @@ void main() {
 
   float rr = superR(p, uRadial.z);
   float th = atan(p.y, p.x);
+  float rho = min(length(p) / DISC_R, 1.0);
   float f = 0.0;
   float total = 0.0;
 
@@ -51,19 +64,17 @@ void main() {
     if (q >= uCount) break;
     vec4 M = uModes[q];
     float n = M.x, m = M.y, s = M.z, w = M.w;
-    total += w;
+    total += abs(w);
     float v;
-    if (uSym == 0) {
-      v = cos(n * PI * p.x) * cos(m * PI * p.y) + s * cos(m * PI * p.x) * cos(n * PI * p.y);
-    } else if (uSym == 1) {
-      v = cos(n * PI * p.x) * cos(m * PI * p.y) + s * 0.55 * cos(m * PI * p.x) * cos(n * PI * p.y);
+    if (uSym <= 1) {
+      v = beam(n, p.x) * beam(m, p.y);
+      if (s > 0.5) v += beam(m, p.x) * beam(n, p.y);
     } else if (uSym == 2) {
       vec2 u = p * 0.5 + 0.5;
-      float a = n + 1.0, b = m + 1.0;
-      float sg = a == b ? 1.0 : -1.0;
-      v = sin(a * PI * u.x) * sin(b * PI * u.y) + sg * sin(b * PI * u.x) * sin(a * PI * u.y);
+      v = sin(n * PI * u.x) * sin(m * PI * u.y) + s * sin(m * PI * u.x) * sin(n * PI * u.y);
     } else {
-      v = cos(n * PI * rr * 0.75) * cos(2.0 * m * th);
+      float r = texture2D(uTable, vec2((rho * (TABLE_W - 1.0) + 0.5) / TABLE_W, (m + 0.5) / uTableRows)).r;
+      v = n > 0.5 ? r * cos(n * th) : r;
     }
     f += w * v;
   }
@@ -102,11 +113,17 @@ uniform sampler2D uField;
 uniform float uFieldTexel;   // 1 / field resolution
 uniform vec2 uBounds;        // visible part of the plate
 uniform float uFloor;        // lowest visible y: below -uBounds.y while the canvas overhangs
+uniform float uRehome;       // per step, the chance a grain off the plate is put back on it
+uniform float uRows;         // active rows of the particle texture
+uniform float uSize;         // particle texture side
 uniform float uV;            // vibration
 uniform float uKick;         // transient bounce
 uniform float uJitter;       // bounce at antinodes, scaled by |f|²
 uniform float uDiffuse;      // small constant bounce: gives lines their width
 uniform float uPull;         // Newton step toward the nodal line
+uniform float uDriftLeft;    // s until sand at the title's ends reaches the figure; -1000: uPull instead
+uniform float uDriftLag;     // the middle of the title arrives this much later
+uniform float uF60;          // this step, in 60 Hz frames
 uniform float uMaxStep;
 uniform float uFrame;
 uniform vec4 uImp[4];        // pointer impulses: x, y, radius, strength
@@ -121,7 +138,9 @@ ${hash}
 
 float field(vec2 p) {
   vec2 uv = p * 0.5 + 0.5;
-  float f = texture2D(uField, uv).r;
+  // below the plate (the strip under the dock during the intro) the figure
+  // carries on as its mirror image, which meets the plate's edge seamlessly
+  float f = texture2D(uField, vec2(uv.x, abs(uv.y))).r;
   if (uTitleMix <= 0.0 && uTitleHold <= 0.0) return f;
   // the plate shakes hardest in the middle, so the middle holds on longer
   float m = mix(uTitleMix, max(uTitleMix, uTitleHold), 1.0 - smoothstep(0.0, uTitleHalf, abs(p.x)));
@@ -147,7 +166,14 @@ void main() {
   }
 
   // and drifts toward the line where the plate stays still
-  vec2 s = -g * (uPull * P.z * f / (dot(g, g) + 1e-4));
+  // while the title merges, each grain covers an even share of the way per
+  // step, timed to arrive with its part of the word: the middle a little later
+  float pull = uPull;
+  if (uDriftLeft > -100.0) {
+    float mid = 1.0 - smoothstep(0.0, uTitleHalf, abs(p.x));
+    pull = min(0.6, uF60 / max(1.0, (uDriftLeft + uDriftLag * mid) * 60.0));
+  }
+  vec2 s = -g * (pull * P.z * f / (dot(g, g) + 1e-4));
   float sl = length(s);
   if (sl > uMaxStep) s *= uMaxStep / sl;
 
@@ -158,11 +184,39 @@ void main() {
   // the letters stay bare: grains that land on them are sprinkled elsewhere
   bool lifted = uTitleMix >= 1.0 && texture2D(uTitle, p * 0.5 + 0.5).r > 0.5 && hash12(seed + 5.9) < uTitleGain;
 
-  // grains that fall off the edge are sprinkled back on
-  if (lifted || abs(p.x) > uBounds.x || p.y > uBounds.y || p.y < uFloor) {
+  bool off = abs(p.x) > uBounds.x || p.y > uBounds.y || p.y < uFloor;
+  if (lifted || (off && uRehome >= 1.0)) {
+    // grains that fall off the edge are sprinkled back on
     p = vec2((hash12(seed + 3.7) * 2.0 - 1.0) * uBounds.x, mix(uFloor, uBounds.y, hash12(seed + 9.1)));
+  } else if (off) {
+    // or, unhurried, wait where they are, then land beside a grain on the plate
+    if (hash12(seed + 12.7) < uRehome) {
+      vec2 src = vec2(hash12(seed + 3.7), (floor(hash12(seed + 9.1) * uRows) + 0.5) / uSize);
+      p = texture2D(uPos, src).xy + (vec2(hash12(seed + 13.3), hash12(seed + 15.1)) - 0.5) * 0.004;
+    } else p = P.xy;
   }
   gl_FragColor = vec4(p, P.zw);
+}`;
+
+/**
+ * Fresh sand sprinkled evenly over the visible plate, every grain at once on
+ * the GPU: a few in sixteen are fine dust, slower and dimmer than the rest.
+ */
+export const seedFrag = /* glsl */ `
+precision highp float;
+varying vec2 vUv;
+uniform vec2 uBounds;    // visible part of the plate
+uniform float uFloor;    // lowest visible y
+uniform float uSeed;     // a new sprinkling each time
+${hash}
+void main() {
+  vec2 h = vUv * 4096.0 + uSeed;
+  bool dust = hash12(h + 1.3) < 0.06;
+  vec2 p = vec2((hash12(h + 2.1) * 2.0 - 1.0) * uBounds.x, mix(uFloor, uBounds.y, hash12(h + 3.7)));
+  float a = hash12(h + 4.9), b = hash12(h + 6.1);
+  float mobility = dust ? 0.12 + a * 0.3 : 0.7 + a * 0.3;
+  float brightness = dust ? 0.2 + b * 0.3 : 0.35 + b * hash12(h + 7.9) * 0.65;
+  gl_FragColor = vec4(p, mobility, brightness);
 }`;
 
 /**
@@ -242,7 +296,9 @@ uniform float uBright;
 uniform sampler2D uDensity;  // opening title: share of the sand that shows, by place
 uniform float uDensityMix;
 uniform sampler2D uLetters;  // the title's letters, kept bare of sand
-uniform float uLettersGain;  // 0..1: how far the stamp has lifted
+uniform float uLettersGain;  // 0..1: how bare the letters are kept
+uniform float uTitleHold;    // the middle of the word's mix, which lingers after the ends let go
+uniform float uTitleHalf;    // half the word's width, plate units
 varying float vB;
 ${hash}
 void main() {
@@ -252,17 +308,19 @@ void main() {
   float edge = max(abs(P.x), uOffset.y > 0.0 ? P.y : abs(P.y));
   vB = P.w * uBright * smoothstep(1.0, 0.99, edge);
   gl_PointSize = uPointSize;
-  if (uDensityMix > 0.0) {
+  if (uDensityMix > 0.0 || uTitleHold > 0.0) {
+    // the word lets go at its ends first, its middle a little later
+    float m = mix(uDensityMix, max(uDensityMix, uTitleHold), 1.0 - smoothstep(0.0, uTitleHalf, abs(P.x)));
     // a scattered handful rather than an even layer
     float d = texture2D(uDensity, P.xy * 0.5 + 0.5).r;  // sparse near the word, none far away
     vec2 uv = P.xy * 0.5 + 0.5;
-    float inLetter = step(0.5, texture2D(uLetters, uv).r) * step(hash12(position.xy * 4096.0 + 2.9), uLettersGain);
-    if (inLetter > 0.0 || hash12(position.xy * 4096.0 + 5.3) > mix(1.0, d, uDensityMix)) {
+    float inLetter = step(0.5, texture2D(uLetters, uv).r) * step(hash12(position.xy * 4096.0 + 2.9), uLettersGain * m);
+    if (inLetter > 0.0 || hash12(position.xy * 4096.0 + 5.3) > mix(1.0, d, m)) {
       gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
       return;
     }
     // the odd grain catches the light, like glitter
-    if (hash12(position.xy * 4096.0 + 11.7) < 0.015 * uDensityMix) {
+    if (hash12(position.xy * 4096.0 + 11.7) < 0.015 * m) {
       gl_PointSize = uPointSize * 2.0;
       vB *= 1.5;
     }

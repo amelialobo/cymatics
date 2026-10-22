@@ -5,7 +5,7 @@ import { AdjustPanel } from './ui/AdjustPanel';
 import { ColourPanel } from './ui/ColourPanel';
 import { Dock, InfoButton } from './ui/Bars';
 import { ExperienceContext, toggleFullscreen } from './ui/context';
-import { Bolt, Details, DropOverlay, FileInput, Help, Intro, Loader, NoRenderer, Toast, Welcome } from './ui/Overlays';
+import { Bolt, Details, DropOverlay, FileInput, Help, Intro, NoRenderer, Toast, Welcome } from './ui/Overlays';
 import { cx } from './ui/primitives';
 
 export default function App() {
@@ -13,8 +13,8 @@ export default function App() {
   const [exp, setExp] = useState<Experience | null>(null);
   const [dragging, setDragging] = useState(false);
   const renderer = useUI((s) => s.renderer);
-  // the bars stay out of the way while the sand spells the title
-  const titled = useUI((s) => s.intro === 'forming' || s.intro === 'title');
+  // the bars stay out of the way until the title has dispersed into the plate
+  const titled = useUI((s) => s.intro !== 'done');
 
   // the instrument lives outside React; mount it once, tear it down fully
   useEffect(() => {
@@ -114,7 +114,8 @@ export default function App() {
       <main
         ref={stageRef}
         aria-label="Vibrating plate. Touch or drag to stir the sand."
-        className="fixed inset-x-0 top-0 touch-none bg-black"
+        // no background of its own: it shows the plate's colour until the first frame
+        className="fixed inset-x-0 top-0 touch-none"
         // the plate sits centred in the space above the dock
         style={{ bottom: 'var(--dock-h, 0px)' }}
       />
@@ -133,7 +134,6 @@ export default function App() {
       <Help />
       <DropOverlay active={dragging} />
       <Toast />
-      <Loader />
     </ExperienceContext.Provider>
   );
 }

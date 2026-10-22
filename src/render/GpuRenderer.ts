@@ -4,14 +4,15 @@
  */
 import * as THREE from 'three';
 import { NOISE_AMT, NOISE_WAVES, SYM_INDEX, WARP, MAX_ACTIVE } from '../pattern/modes';
-import { displayFrag, fieldFrag, pointsFrag, pointsVert, pourFrag, quadVert, simFrag } from './shaders';
+import { TABLE_W, type Plate } from '../pattern/plates';
+import { displayFrag, fieldFrag, pointsFrag, pointsVert, pourFrag, quadVert, seedFrag, simFrag } from './shaders';
 import { TUNE, plateLayout, type FrameInput, type PlateRenderer } from './types';
 import type { TitleMask } from './title';
 
 const FIELD_RES = 512;
 /** sand is reserved once at this size (grains = size²); quality only changes how much of it is active */
 const COARSE = matchMedia('(pointer: coarse)').matches;
-const CAPACITY = COARSE ? 768 : 1024;
+const CAPACITY = COARSE ? 1728 : 2646;
 /** a phone's pixels are physically small: its grains are drawn a little wider to match */
 const GRAIN_PX = COARSE ? 1.5 : 1.0;
 const MIN_ACTIVE = 16000;
@@ -44,6 +45,8 @@ export class GpuRenderer implements PlateRenderer {
 
   private simScene = new THREE.Scene();
   private pourScene = new THREE.Scene();
+  private seedScene = new THREE.Scene();
+  private seedU: Uniforms;
   private pourU: Uniforms = {
     uPos: { value: null },
     uOld: { value: 0 },
@@ -53,7 +56,6 @@ export class GpuRenderer implements PlateRenderer {
   private simU: Uniforms;
   private posRT: THREE.WebGLRenderTarget[] = [];
   private posTex: THREE.Texture | null = null;
-  private seedTex: THREE.DataTexture | null = null;
   private titleTex: THREE.DataTexture;
   private densityTex: THREE.DataTexture;
   private ping = 0;
@@ -85,6 +87,9 @@ export class GpuRenderer implements PlateRenderer {
   private floor = { value: -1 };
   private bufSize = new THREE.Vector2();
   private readonly modesArr = new Float32Array(MAX_ACTIVE * 4);
+  /** the round plate's radial profiles, uploaded once it is first shown */
+  private tableTex: THREE.DataTexture | null = null;
+  private tablePlate: Plate | null = null;
   private readonly impArr = new Float32Array(16);
 
   constructor(container: HTMLElement) {
@@ -120,6 +125,8 @@ export class GpuRenderer implements PlateRenderer {
       uModes: { value: this.modesArr },
       uCount: { value: 0 },
       uSym: { value: 0 },
+      uTable: { value: null },
+      uTableRows: { value: 1 },
       uRadial: { value: new THREE.Vector4() },
       uNoise: { value: noise },
       uNoiseAmt: { value: NOISE_AMT },
@@ -134,11 +141,17 @@ export class GpuRenderer implements PlateRenderer {
       uFieldTexel: { value: 1 / FIELD_RES },
       uBounds: { value: this.bounds },
       uFloor: this.floor,
+      uRehome: { value: 1 },
+      uRows: { value: 1 },
+      uSize: { value: 1 },
       uV: { value: 0 },
       uKick: { value: 0 },
       uJitter: { value: TUNE.jitter },
       uDiffuse: { value: TUNE.diffuse },
       uPull: { value: TUNE.pull },
+      uDriftLeft: { value: -1 },
+      uDriftLag: { value: 0 },
+      uF60: { value: 1 },
       uMaxStep: { value: TUNE.maxStep },
       uFrame: { value: 0 },
       uImp: { value: this.impArr },
@@ -154,6 +167,8 @@ export class GpuRenderer implements PlateRenderer {
     this.simU.uTitle.value = this.titleTex;
     this.simScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, simFrag, this.simU)));
     this.pourScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, pourFrag, this.pourU)));
+    this.seedU = { uBounds: { value: this.bounds }, uFloor: this.floor, uSeed: { value: 0 } };
+    this.seedScene.add(new THREE.Mesh(this.quad, this.mat(quadVert, seedFrag, this.seedU)));
 
     this.displayU = {
       uField: { value: this.fieldRT.texture },
@@ -179,6 +194,8 @@ export class GpuRenderer implements PlateRenderer {
       uDensityMix: { value: 0 },
       uLetters: { value: null },
       uLettersGain: { value: 0 },
+      uTitleHold: { value: 0 },
+      uTitleHalf: { value: 1 },
     };
     this.densityTex = this.redTexture(new Uint8Array(1), 1);
     this.pointsU.uDensity.value = this.densityTex;
@@ -317,41 +334,39 @@ export class GpuRenderer implements PlateRenderer {
     this.seed();
   }
 
-  /** sprinkle fresh sand evenly over the visible plate */
+  /** sprinkle fresh sand evenly over the visible plate, on the GPU */
   private seed() {
-    const size = this.texSize;
-    const data = new Float32Array(size * size * 4);
-    const { x: bx, y: by } = this.bounds, lo = this.floor.value;
-    for (let i = 0; i < size * size; i++) {
-      const dust = Math.random() < 0.06;
-      data[i * 4] = (Math.random() * 2 - 1) * bx;
-      data[i * 4 + 1] = lo + Math.random() * (by - lo);
-      data[i * 4 + 2] = dust ? 0.12 + Math.random() * 0.3 : 0.7 + Math.random() * 0.3; // mobility
-      data[i * 4 + 3] = dust ? 0.2 + Math.random() * 0.3 : 0.35 + Math.random() * Math.random() * 0.65; // brightness
-    }
-    this.seedTex?.dispose();
-    this.seedTex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.FloatType);
-    this.seedTex.minFilter = this.seedTex.magFilter = THREE.NearestFilter;
-    this.seedTex.needsUpdate = true;
-    // copy the fresh sand into both buffers in full (not just the active rows),
-    // so grains that become active later start somewhere sensible
-    const u = this.simU;
-    u.uPos.value = this.seedTex;
-    u.uV.value = u.uKick.value = u.uPull.value = 0;
-    u.uImpN.value = 0;
+    this.seedU.uSeed.value = Math.random() * 1000;
+    // both buffers in full (not just the active rows), so grains that become
+    // active later start somewhere sensible
     for (const rt of this.posRT) {
       const test = rt.scissorTest;
       rt.scissorTest = false;
       this.gl.setRenderTarget(rt);
-      this.gl.render(this.simScene, this.camera);
+      this.gl.render(this.seedScene, this.camera);
       rt.scissorTest = test;
     }
+    this.gl.setRenderTarget(null);
     this.posTex = this.posRT[0].texture;
     this.ping = 1;
   }
 
   scatter() {
     this.seed();
+  }
+
+  private uploadTable(plate: Plate) {
+    this.tableTex?.dispose();
+    const data = new Uint16Array(plate.table!.length);
+    for (let i = 0; i < data.length; i++) data[i] = THREE.DataUtils.toHalfFloat(plate.table![i]);
+    const t = new THREE.DataTexture(data, TABLE_W, plate.tableRows, THREE.RedFormat, THREE.HalfFloatType);
+    t.minFilter = t.magFilter = THREE.LinearFilter;
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    t.needsUpdate = true;
+    this.tableTex = t;
+    this.tablePlate = plate;
+    this.fieldU.uTable.value = t;
+    this.fieldU.uTableRows.value = plate.tableRows;
   }
 
   private redTexture(data: Uint8Array, size: number) {
@@ -365,6 +380,7 @@ export class GpuRenderer implements PlateRenderer {
     this.titleTex.dispose();
     this.titleTex = mask ? this.redTexture(mask.data, mask.size) : this.redTexture(new Uint8Array(1), 1);
     this.simU.uTitleHalf.value = mask ? mask.right : 1;
+    this.pointsU.uTitleHalf.value = mask ? mask.right : 1;
     this.simU.uTitle.value = this.titleTex;
     this.densityTex.dispose();
     this.densityTex = mask ? this.redTexture(mask.density, mask.densitySize) : this.redTexture(new Uint8Array(1), 1);
@@ -405,7 +421,8 @@ export class GpuRenderer implements PlateRenderer {
     const bank = inp.bank;
     this.modesArr.set(bank.packed);
     this.fieldU.uCount.value = bank.activeCount;
-    this.fieldU.uSym.value = SYM_INDEX[inp.symmetry];
+    this.fieldU.uSym.value = SYM_INDEX[bank.plate.sym];
+    if (bank.plate.table && bank.plate !== this.tablePlate) this.uploadTable(bank.plate);
     (this.fieldU.uRadial.value as THREE.Vector4).set(bank.radialWeight(), bank.radial.k, bank.radial.p, 0);
     this.fieldU.uNorm.value = bank.norm;
     this.gl.setRenderTarget(this.fieldRT);
@@ -420,7 +437,10 @@ export class GpuRenderer implements PlateRenderer {
     u.uKick.value = inp.kick * TUNE.kick * f60;
     u.uJitter.value = TUNE.jitter * f60;
     u.uDiffuse.value = TUNE.diffuse * f60 * (1 - 0.45 * inp.stability);
-    u.uPull.value = Math.min(0.6, inp.V * TUNE.pull * inp.response * f60);
+    u.uPull.value = Math.min(0.6, Math.sqrt(inp.V) * TUNE.pull * inp.response * f60);
+    u.uDriftLeft.value = inp.driftLeft;
+    u.uDriftLag.value = inp.driftLag;
+    u.uF60.value = f60;
     u.uMaxStep.value = TUNE.maxStep * f60;
     u.uFrame.value = this.frameNo++ % 4096;
     const n = Math.min(4, inp.impulses.length);
@@ -432,6 +452,9 @@ export class GpuRenderer implements PlateRenderer {
     u.uTitleMix.value = inp.titleMix;
     u.uTitleGain.value = inp.titleGain;
     u.uTitleShake.value = inp.titleShake;
+    u.uRehome.value = inp.rehome;
+    u.uRows.value = this.activeRows;
+    u.uSize.value = this.texSize;
     u.uTitleHold.value = inp.titleHold;
     const target = this.posRT[this.ping];
     this.gl.setRenderTarget(target);
@@ -450,7 +473,8 @@ export class GpuRenderer implements PlateRenderer {
     this.displayU.uLine.value = (0.015 + 0.035 * Math.min(1, inp.V + inp.kick)) * own;
     this.displayU.uHaze.value = 0.16 * own;
     this.pointsU.uDensityMix.value = inp.titleMix;
-    this.pointsU.uLettersGain.value = inp.titleMix * inp.titleGain;
+    this.pointsU.uLettersGain.value = inp.titleGain;
+    this.pointsU.uTitleHold.value = inp.titleHold;
     const c = inp.colors;
     (this.displayU.uBgIn.value as THREE.Vector3).set(c[0], c[1], c[2]);
     (this.displayU.uSand.value as THREE.Vector3).set(c[3], c[4], c[5]);
@@ -513,11 +537,11 @@ export class GpuRenderer implements PlateRenderer {
     this.fieldRT.dispose();
     this.accumRT.dispose();
     this.posRT.forEach((rt) => rt.dispose());
-    this.seedTex?.dispose();
     this.titleTex.dispose();
     this.densityTex.dispose();
+    this.tableTex?.dispose();
     this.quad.dispose();
-    for (const scene of [this.fieldScene, this.simScene, this.pourScene, this.displayScene, this.pointsScene]) {
+    for (const scene of [this.fieldScene, this.simScene, this.pourScene, this.seedScene, this.displayScene, this.pointsScene]) {
       scene.traverse((o) => {
         const m = (o as THREE.Mesh).material as THREE.Material | undefined;
         m?.dispose();

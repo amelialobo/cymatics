@@ -3,6 +3,9 @@ import type { TitleMask } from './title';
 
 export interface Impulse { x: number; y: number; r: number; s: number }
 
+/** FrameInput.driftLeft when the sand follows the plate's own pull */
+export const NO_DRIFT = -1000;
+
 export interface FrameInput {
   dt: number;
   bank: ModeBank;
@@ -29,6 +32,20 @@ export interface FrameInput {
   titleShake: number;
   /** 0..1: the middle of the word lets go later than its ends; this is its own mix */
   titleHold: number;
+  /**
+   * 0..1: per step, the chance a grain off the plate is put back on it. 1 at
+   * once, sprinkled anywhere; below 1 it waits where it is, then lands beside
+   * a grain already on the plate (the strip under the dock drains gently)
+   */
+  rehome: number;
+  /**
+   * seconds until the sand at the ends of the title reaches the figure (past
+   * it, below 0), each grain moving at an even pace in place of the plate's
+   * own pull; NO_DRIFT leaves the plate's pull alone
+   */
+  driftLeft: number;
+  /** how much later than the ends the sand at the middle of the title arrives, s */
+  driftLag: number;
 }
 
 export interface PlateRenderer {
@@ -62,8 +79,8 @@ export interface PlateRenderer {
 export const TUNE = {
   jitter: 0.018,
   diffuse: 0.0105,
-  pull: 0.28,
-  maxStep: 0.018,
+  pull: 0.4,
+  maxStep: 0.03,
   kick: 0.014,
 };
 
@@ -91,6 +108,7 @@ export function desiredParticles(cssW: number, cssH: number, density: number, co
   // a phone's plate spans its long side, so it is drawn small and its lines
   // crowd together: what keeps them full is sand per line, which scales with
   // the short side rather than the area
-  const base = coarse ? Math.max(cssW * cssH * 0.3, Math.min(cssW, cssH) * 1000) : cssW * cssH * 0.6;
-  return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 589824 : 1048576));
+  // a computer gets seven million grains whatever the window's size
+  const base = coarse ? Math.max(cssW * cssH * 1.5, Math.min(cssW, cssH) * 5000) : 7_000_000;
+  return Math.round(Math.min(Math.max(base * density, 16000), coarse ? 2985984 : 7_001_316));
 }

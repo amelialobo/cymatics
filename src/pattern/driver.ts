@@ -1,29 +1,45 @@
 /**
  * Sound → plate. Turns audio features into mode targets and vibration.
  *
- *  dominant pitch     → main eigenmode (higher pitch, higher mode)
+ *  dominant pitch     → the plate's forced response at that frequency (see plates.ts)
+ *  tone generator     → the same, from the oscillator's exact frequency and
+ *                       overtones, so one pitch always makes one figure
  *  low / mid / high   → extra modes layered on top: broad cells, crossings, fine lattice
  *  loudness           → vibration: how hard the sand is thrown
  *  spectral centroid  → spacing and squareness of the rings around the bolt
  *  transients         → kicks that scatter sand off the lines
  *  steady pitch       → the sand settles into tighter lines
  */
-import type { AudioFeatures, SourceKind } from '../audio/AudioEngine';
+import type { AudioFeatures, SourceKind, Waveform } from '../audio/AudioEngine';
 import type { VisualParams } from '../core/store';
-import type { ModeBank } from './modes';
+import { PURE, type ModeBank } from './modes';
+import { resonances, type Plate } from './plates';
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
-/** the plate eigenvalue that resonates at a frequency (before complexity scaling) */
-export const lamFromHz = (hz: number) => hz / 22;
-export const hzFromLam = (lam: number) => lam * 22;
+/**
+ * the plate's κ that resonates at a frequency (before complexity scaling). Like
+ * a steel plate about 66 cm across and 1 mm thick: frequency ∝ κ.
+ */
+const HZ_PER_LAM = 22 / (Math.PI * Math.PI);
+export const lamFromHz = (hz: number) => hz / HZ_PER_LAM;
+export const hzFromLam = (lam: number) => lam * HZ_PER_LAM;
 
 /** complexity 0..100 → pitch multiplier (audio drive) */
 export const complexityMult = (c: number) => Math.pow(2.8, (c - 50) / 50);
-/** complexity 0..100 → eigenvalue (manual drive) */
-export const manualLambda = (c: number) => 2 * Math.pow(160, c / 100);
+/** complexity 0..100 → κ (manual drive) */
+export const manualLambda = (c: number) => 2 * Math.PI * Math.PI * Math.pow(160, c / 100);
 
-const AMBIENT_LAMS = [5, 10, 13, 17, 20, 25, 29, 34, 41, 45, 52, 58, 65, 74, 85];
+
+/** Fourier series of each waveform: amplitude of harmonic k+1 relative to the fundamental */
+const HARMONICS: Partial<Record<Waveform, readonly number[]>> = {
+  sine: PURE,
+  triangle: [1, 0, 1 / 9, 0, 1 / 25, 0, 1 / 49],
+  square: [1, 0, 1 / 3, 0, 1 / 5, 0, 1 / 7, 0, 1 / 9],
+  sawtooth: [1, 1 / 2, 1 / 3, 1 / 4, 1 / 5, 1 / 6, 1 / 7, 1 / 8],
+};
+
+export interface ToneState { running: boolean; freq: number; wave: Waveform }
 
 export class PatternDriver {
   /** vibration amplitude */
@@ -38,9 +54,17 @@ export class PatternDriver {
   stability = 0;
 
   private smooth = { dom: 0, low: 0, mid: 0, high: 0 };
-  private ambient = { lam: 0, next: 0, holdUntil: 0 };
+  /** the plate the resting figure was set for (cleared while sound has it) */
+  private ambient = { plate: null as Plate | null, holdUntil: 0, shown: false };
+  /** true while no sound has the plate: it holds its resting figure */
+  idle = true;
+  /** true while the stopped tone's slider sets the figure (no sound) */
+  silentTone = false;
   private silentFor = 99;
   private prevDom = 0;
+  /** set once the tone has been played or its pitch moved: from then on the stopped tone still shapes the plate */
+  private toneTouched = false;
+  private lastToneFreq = NaN;
 
   constructor(private bank: ModeBank, private reducedMotion: boolean) {}
 
@@ -52,7 +76,7 @@ export class PatternDriver {
     return (this.smooth[key] = Math.exp(Math.log(cur) + (Math.log(hz) - Math.log(cur)) * k));
   }
 
-  update(dt: number, t: number, F: AudioFeatures, p: VisualParams, source: SourceKind | null) {
+  update(dt: number, t: number, F: AudioFeatures, p: VisualParams, source: SourceKind | null, tone: ToneState, toneTab = false) {
     const sounding = F.active && F.level > 0.02 && F.dominantHz > 20;
     if (sounding) {
       // after a pause, start again from a simple formation
@@ -61,9 +85,17 @@ export class PatternDriver {
     } else this.silentFor += dt;
     this.warm = Math.min(1, this.warm + dt / (source === 'tone' ? 0.35 : 1.5));
 
+    if (tone.running || (this.lastToneFreq === this.lastToneFreq && tone.freq !== this.lastToneFreq)) this.toneTouched = true;
+    this.lastToneFreq = tone.freq;
+    // on the tone panel with nothing playing, the pitch slider still sets the figure, silently
+    const silentTone = (this.silentTone = toneTab && this.toneTouched && !tone.running && !F.active);
+
     if (p.drive === 'manual') this.driveManual(dt, F, p);
+    else if (source === 'tone' && tone.running) this.driveTone(dt, t, F, p, tone);
     else if (F.active) this.driveAudio(dt, t, F, p, source, sounding);
+    else if (silentTone) this.driveSilentTone(dt, t, p, tone);
     else this.driveAmbient(dt, t);
+    this.idle = p.drive !== 'manual' && !(source === 'tone' && tone.running) && !silentTone && !F.active && t > this.ambient.holdUntil;
 
     if (this.reducedMotion) {
       this.V = Math.min(this.V, 0.45);
@@ -104,12 +136,51 @@ export class PatternDriver {
       const change = this.prevDom ? Math.abs(Math.log(dom / this.prevDom)) / Math.max(dt, 1e-3) : 1;
       this.prevDom = dom;
       const steady = change < 0.15 && F.fluxRatio < 1.6 ? 1 : 0;
-      this.stability += (steady - this.stability) * (1 - Math.exp(-dt * (steady ? 0.5 : 5)));
+      this.stability += (steady - this.stability) * (1 - Math.exp(-dt * (steady ? 1.2 : 5)));
     }
     const Vt = clamp(F.level, 0, 1.4) * (0.45 + 0.55 * this.res) + Math.max(0, F.delta) * 2;
     this.approachV(Vt, dt);
     this.kick = Math.max(this.kick * Math.exp(-dt * 9), F.onset);
     this.ambient.holdUntil = t + 3;
+    this.ambient.plate = null;
+  }
+
+  /**
+   * The tone generator: its frequency is known exactly, so the figure is the
+   * plate's response to that frequency alone, the same every time.
+   */
+  private driveTone(dt: number, t: number, F: AudioFeatures, p: VisualParams, tone: ToneState) {
+    this.toneFigure(dt, p, tone);
+    const Vt = clamp(F.level, 0, 1.4) * (0.45 + 0.55 * this.res) + Math.max(0, F.delta) * 2;
+    this.approachV(Vt, dt);
+    this.kick = Math.max(this.kick * Math.exp(-dt * 9), F.onset);
+    this.ambient.holdUntil = t + 3;
+    this.ambient.plate = null;
+  }
+
+  /** the stopped tone: the same figure for the slider's pitch, shaken gently as if at rest */
+  private driveSilentTone(dt: number, t: number, p: VisualParams, tone: ToneState) {
+    this.toneFigure(dt, p, tone);
+    const Vt = this.reducedMotion ? 0.25 : 0.38 + 0.08 * Math.sin(t * 0.37);
+    this.V += (Vt - this.V) * (1 - Math.exp(-dt * 1.5));
+    this.kick *= Math.exp(-dt * 6);
+    this.ambient.holdUntil = t + 3;
+    this.ambient.plate = null;
+  }
+
+  private toneFigure(dt: number, p: VisualParams, tone: ToneState) {
+    const bank = this.bank;
+    bank.clearTargets();
+    this.res = bank.excite(lamFromHz(tone.freq) * complexityMult(p.complexity), 1, HARMONICS[tone.wave] ?? PURE);
+    bank.setRadial(0, 3, 2.6);
+    this.warm = 1;
+
+    // a held pitch lets the sand settle
+    const hz = tone.freq;
+    const change = this.prevDom ? Math.abs(Math.log(hz / this.prevDom)) / Math.max(dt, 1e-3) : 1;
+    this.prevDom = hz;
+    const steady = change < 0.15 ? 1 : 0;
+    this.stability += (steady - this.stability) * (1 - Math.exp(-dt * (steady ? 1.2 : 5)));
   }
 
   private driveManual(dt: number, F: AudioFeatures, p: VisualParams) {
@@ -124,22 +195,19 @@ export class PatternDriver {
     this.stability += (1 - this.stability) * (1 - Math.exp(-dt * 0.5));
   }
 
-  /** no source yet: a slow idle drive keeps the installation alive */
+  /** no source yet: the plate rests in one of its own resonant figures */
   private driveAmbient(dt: number, t: number) {
     const a = this.ambient;
-    if (t > a.next && t > a.holdUntil) {
-      let lam: number;
-      do lam = AMBIENT_LAMS[(Math.random() * AMBIENT_LAMS.length) | 0];
-      while (lam === a.lam);
-      const first = a.lam === 0;
-      a.lam = lam;
-      a.next = t + 9 + Math.random() * 6;
-      const bank = this.bank;
+    const bank = this.bank;
+    if (t > a.holdUntil && a.plate !== bank.plate) {
+      a.plate = bank.plate;
+      // a resonance near 330 Hz: neither too plain nor too fine
+      const lam = resonances(bank.plate, lamFromHz(250), lamFromHz(450), 1)[0] ?? lamFromHz(330);
       bank.clearTargets();
       this.res = bank.excite(lam, 1);
-      if (Math.random() < 0.45) bank.excite(lam * (1.8 + Math.random() * 0.8), 0.35);
-      bank.setRadial(0.2 + Math.random() * 0.25, 2 + Math.random() * 5, 2.3 + Math.random() * 1.5);
-      if (!first) this.kick = Math.max(this.kick, 0.25);
+      bank.setRadial(0, 3, 2.6);
+      if (a.shown) this.kick = Math.max(this.kick, 0.25);
+      a.shown = true;
     }
     const Vt = this.reducedMotion ? 0.25 : 0.38 + 0.08 * Math.sin(t * 0.37);
     this.V += (Vt - this.V) * (1 - Math.exp(-dt * 1.5));
